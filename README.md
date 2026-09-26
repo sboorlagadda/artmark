@@ -66,7 +66,9 @@ artmark forget art_...
 
 ## Agent behavior
 
-The policy in [AGENTS.md](AGENTS.md) is to automatically quick-register durable artifacts supplied by the user. Explicit saves and user artifacts already read for a task should be indexed. An agent should ask before registering artifacts it found independently through searches. The CLI provides the operations; the agent or future MCP integration applies this policy.
+The bundled Codex skill is at [skills/artmark/SKILL.md](skills/artmark/SKILL.md). To make it available outside this repository, copy the `skills/artmark` directory to `~/.codex/skills/artmark` and make sure the `artmark` CLI is on `PATH`. When working from this checkout, the skill can use `cargo run --manifest-path <repo-root>/Cargo.toml --` before the binary is installed.
+
+The policy in [AGENTS.md](AGENTS.md) is to automatically quick-register durable artifacts supplied by the user. Explicit saves and user artifacts already read for a task should be indexed. An agent should ask before registering artifacts it found independently through searches. The skill applies this policy through the CLI.
 
 Search cards should describe an artifact for later retrieval. They should never copy whole source documents or include credentials. The CLI rejects common content and credential fields in source metadata and retrieval hints and limits catalog size.
 

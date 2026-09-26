@@ -34,5 +34,5 @@ The first delivery is a local Rust CLI with SQLite and FTS5. MCP and embeddings 
 ## Later milestones
 
 - [ ] Add a stdio MCP interface for register, index, search, and get.
-- [ ] Ship an agent skill that applies the registration policy in `AGENTS.md`.
+- [x] Ship an agent skill that applies the registration policy in `AGENTS.md`.
 - [ ] Evaluate lexical retrieval before adding optional embeddings.

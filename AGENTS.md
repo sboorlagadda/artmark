@@ -11,6 +11,8 @@ Read `spec.md` before changing product behavior. Artmark is a local registry of 
 
 Track work in `TODO.md` and update it when a task is completed. Make focused commits after a coherent piece of work passes its relevant checks.
 
+The bundled agent workflow is in `skills/artmark/SKILL.md`; keep its CLI examples and registration policy aligned with this file and the shipped commands.
+
 ## Agent registration policy
 
 - Automatically register durable artifacts supplied by the user in prompts or during the session. Quick registration is sufficient when the artifact has not been inspected.

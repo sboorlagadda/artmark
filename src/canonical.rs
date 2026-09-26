@@ -16,10 +16,13 @@ pub fn identify(input: &str) -> Result<Identity> {
     if input.is_empty() {
         bail!("artifact URI cannot be empty");
     }
-    if input.starts_with('/') || input.starts_with('.') {
-        return local_path(Path::new(input), input);
-    }
-    let mut url = Url::parse(input)?;
+    let mut url = match Url::parse(input) {
+        Ok(url) => url,
+        Err(url::ParseError::RelativeUrlWithoutBase) => {
+            return local_path(Path::new(input), input);
+        }
+        Err(error) => return Err(error.into()),
+    };
     if url.scheme() == "file" {
         let path = url
             .to_file_path()
@@ -232,5 +235,12 @@ mod tests {
             a.canonical_key,
             "notion:page:0123456789abcdef0123456789abcdef"
         );
+    }
+
+    #[test]
+    fn bare_relative_file_path_is_supported() {
+        let identity = identify("spec.md").unwrap();
+        assert!(identity.canonical_key.ends_with("/spec.md"));
+        assert_eq!(identity.kind, "local_file");
     }
 }
