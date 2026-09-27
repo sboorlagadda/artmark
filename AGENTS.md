@@ -13,7 +13,7 @@ Track work in `TODO.md` and update it when a task is completed. Make focused com
 
 The bundled agent workflow is in `skills/artmark/SKILL.md`; keep its CLI examples and registration policy aligned with this file and the shipped commands.
 
-For every PR targeting `main` after the initial `0.0.1` release, advance the CLI version by one SemVer step in `Cargo.toml` and update `Cargo.lock`. Add exactly one matching `semver:patch`, `semver:minor`, or `semver:major` PR label. Follow the release guidance in `README.md`; a PR with multiple commits still gets one bump. Confirm that the `Version bump`, `Format and lint`, and all four build checks pass before merging.
+For every PR targeting `main` after the initial `0.0.1` release, advance the CLI version by one SemVer step in `Cargo.toml` and update `Cargo.lock`. Add exactly one matching `semver:patch`, `semver:minor`, or `semver:major` PR label. Follow the release guidance in `README.md`; a PR with multiple commits still gets one bump. Confirm that the `Release label and version`, `Format and lint`, and all four build checks pass before merging.
 
 ## Agent registration policy
 
