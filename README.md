@@ -66,7 +66,7 @@ artmark forget art_...
 
 ## Agent behavior
 
-The bundled Codex skill is at [skills/artmark/SKILL.md](skills/artmark/SKILL.md). To make it available outside this repository, copy the `skills/artmark` directory to `~/.codex/skills/artmark` and make sure the `artmark` CLI is on `PATH`. When working from this checkout, the skill can use `cargo run --manifest-path <repo-root>/Cargo.toml --` before the binary is installed.
+The bundled Codex skill is at [skills/artmark/SKILL.md](skills/artmark/SKILL.md). To make it available outside this repository, copy the `skills/artmark` directory to `~/.codex/skills/artmark`. On first use each session, the skill checks the latest GitHub Release and the installed CLI version, then installs or upgrades the matching release binary when needed. The repository is private, so `gh` must be installed and authenticated with access to `sboorlagadda/artmark`. When working from this checkout, the skill can use `cargo run --manifest-path <repo-root>/Cargo.toml --` if release installation is unavailable.
 
 The policy in [AGENTS.md](AGENTS.md) is to automatically quick-register durable artifacts supplied by the user. Explicit saves and user artifacts already read for a task should be indexed. An agent should ask before registering artifacts it found independently through searches. The skill applies this policy through the CLI.
 
@@ -80,12 +80,12 @@ The SQLite database is the durable record. SQLite may create temporary WAL sidec
 
 ## Releases and versioning
 
-The first CLI release is `0.0.1`. Each PR targeting `main` must advance the version in `Cargo.toml` by exactly one patch, minor, or major step. Run `cargo check` after editing the manifest so `Cargo.lock` matches. The [PR template](.github/pull_request_template.md) gives examples. One PR gets one bump, even if it contains several commits.
+The first CLI release is `0.0.1`. Make changes on a branch and open a PR to `main`. Each PR must advance the version in `Cargo.toml` by exactly one patch, minor, or major step. Run `cargo check` after editing the manifest so `Cargo.lock` matches. Add exactly one matching `semver:patch`, `semver:minor`, or `semver:major` label to the PR. The [PR template](.github/pull_request_template.md) gives examples. One PR gets one bump, even if it contains several commits.
 
 - **Patch:** fixes, documentation, and internal changes (`0.0.1` → `0.0.2`).
 - **Minor:** new features and incompatible changes while the CLI is still in `0.x` development (`0.0.1` → `0.1.0`).
 - **Major:** the first stable public contract (`1.0.0`) and later incompatible changes.
 
-The [CLI workflow](.github/workflows/cli.yml) checks the version against the PR base and builds on Linux x86-64, Windows x86-64, macOS Intel, and macOS Apple Silicon. After a new version reaches `main`, successful builds are published as a `vX.Y.Z` GitHub Release. Each archive contains the CLI binary, this README, and the Artmark skill, with a matching `.sha256` file. A push that reuses a version already tagged at another commit fails the release job.
+The [release policy workflow](.github/workflows/release-policy.yml) checks the version and label against the PR base, including when labels change. The [CLI workflow](.github/workflows/cli.yml) runs tests and builds on PR code changes for Linux x86-64, Windows x86-64, macOS Intel, and macOS Apple Silicon. PRs do not package or upload release assets. Label edits do not repeat those builds, and a new PR commit cancels the previous build run. After a new version reaches `main`, successful builds are packaged and published as a `vX.Y.Z` GitHub Release. Each archive contains the CLI binary, this README, and the Artmark skill, with a matching `.sha256` file. A push that reuses a version already tagged at another commit fails the release job.
 
-Require the `Version bump`, `Format and lint`, and four platform build checks in the `main` branch ruleset to prevent an unchecked PR from merging. The workflow grants release publication permission only to the release job.
+Before merging, confirm that `Release label and version`, `Format and lint`, and all four `Build <target>` checks pass. To make those checks mandatory, add them to a `main` branch ruleset with **Require a pull request before merging** and **Require status checks to pass before merging**. This private repository currently needs a GitHub plan that supports rulesets for private repositories before GitHub can enforce them. The workflow grants release publication permission only to the release job.

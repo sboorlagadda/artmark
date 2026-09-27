@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import subprocess
 import sys
@@ -12,6 +14,7 @@ from pathlib import Path
 
 
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
+RELEASE_LABELS = {"semver:patch", "semver:minor", "semver:major"}
 
 
 def parse_version(raw: str) -> tuple[int, int, int]:
@@ -54,11 +57,38 @@ def bump_type(base: str, head: str) -> str:
     raise ValueError(f"PR version {head} must be exactly one bump from {base}: {allowed}")
 
 
-def check_pr(base_manifest: bytes, head_manifest: bytes, head_lockfile: bytes) -> str:
+def parse_pr_labels(raw: str) -> list[str]:
+    try:
+        labels = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError("PR_LABELS_JSON must contain GitHub's PR label array") from error
+    if not isinstance(labels, list) or any(
+        not isinstance(label, dict) or not isinstance(label.get("name"), str)
+        for label in labels
+    ):
+        raise ValueError("PR_LABELS_JSON must contain GitHub's PR label array")
+    return [label["name"] for label in labels]
+
+
+def check_bump_label(labels: list[str], change: str) -> None:
+    selected = [label for label in labels if label in RELEASE_LABELS]
+    expected = f"semver:{change}"
+    if selected != [expected]:
+        raise ValueError(
+            f"PR must have exactly one release label matching its {change} bump: "
+            f"{expected}; found {selected or 'none'}"
+        )
+
+
+def check_pr(
+    base_manifest: bytes, head_manifest: bytes, head_lockfile: bytes, labels: list[str]
+) -> str:
     base = package_version(base_manifest)
     head = package_version(head_manifest)
     validate_lockfile(head_lockfile, head)
-    return bump_type(base, head)
+    change = bump_type(base, head)
+    check_bump_label(labels, change)
+    return change
 
 
 def main() -> int:
@@ -81,8 +111,12 @@ def main() -> int:
     base_manifest = subprocess.check_output(
         ["git", "show", f"{args.base_sha}:Cargo.toml"]
     )
-    change = check_pr(base_manifest, head_manifest, Path("Cargo.lock").read_bytes())
-    print(f"Valid {change} bump: {package_version(base_manifest)} -> {head_version}")
+    labels = parse_pr_labels(os.environ.get("PR_LABELS_JSON", ""))
+    change = check_pr(base_manifest, head_manifest, Path("Cargo.lock").read_bytes(), labels)
+    print(
+        f"Valid {change} bump with semver:{change} label: "
+        f"{package_version(base_manifest)} -> {head_version}"
+    )
     return 0
 
 

@@ -3,7 +3,7 @@ name: CLI
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, edited, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -11,24 +11,11 @@ on:
 permissions:
   contents: read
 
-jobs:
-  version:
-    name: Version bump
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-      - name: Check one SemVer bump and lockfile
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python scripts/version_policy.py check-pr --base-sha "$BASE_SHA"
+concurrency:
+  group: cli-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+jobs:
   lint:
     name: Format and lint
     runs-on: ubuntu-24.04
@@ -80,8 +67,10 @@ jobs:
       - run: cargo test --locked
       - run: cargo build --release --locked
       - name: Package executable
+        if: github.event_name == 'push'
         run: python scripts/release_assets.py pack --target "${{ matrix.target }}" --binary "${{ matrix.binary }}"
       - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push'
         with:
           name: artmark-${{ matrix.target }}
           path: dist/*
