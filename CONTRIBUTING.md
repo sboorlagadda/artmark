@@ -1,6 +1,6 @@
-# Contributing to Artmark
+# Contributing to artmark
 
-Thanks for helping improve Artmark. It is a local catalog of pointers and search cards. Please read [AGENTS.md](AGENTS.md) and [spec.md](spec.md) before changing product behavior: Artmark does not store source documents or retrieve them from providers.
+Thanks for helping improve artmark. It is a local catalog of pointers and search cards. Please read [AGENTS.md](AGENTS.md) and [spec.md](spec.md) before changing product behavior: artmark does not store source documents or retrieve them from providers.
 
 ## Develop locally
 
@@ -19,7 +19,7 @@ The CLI uses SQLite with FTS5 and works without embeddings or a network connecti
 
 ## Open a pull request
 
-Create a branch for each change to `main`. Every PR advances the Artmark package version once in both `Cargo.toml` and `Cargo.lock`, even for documentation or internal changes. Run `cargo check` after changing the manifest so the lockfile matches.
+Create a branch for each change to `main`. Every PR advances the artmark package version once in both `Cargo.toml` and `Cargo.lock`, even for documentation or internal changes. Run `cargo check` after changing the manifest so the lockfile matches.
 
 | Change | Label | Example from `0.0.2` |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ Create a branch for each change to `main`. Every PR advances the Artmark package
 
 Add exactly one matching release label. The `Release label and version` check compares it with the PR's version bump. `Format and lint`, `Dependency audit`, and the four native build checks must also pass before merge. Each native build check runs tests, a release build, and a clean-user install smoke test of its archive. A PR with several commits still gets one version bump.
 
-Dependabot vulnerability alerts are enabled for this repository. When addressing an alert, update the affected dependency in a normal PR with the appropriate Artmark version bump and label. Dependency-only PRs follow the same release policy.
+Dependabot vulnerability alerts are enabled for this repository. When addressing an alert, update the affected dependency in a normal PR with the appropriate artmark version bump and label. Dependency-only PRs follow the same release policy.
 
 ## Releases
 

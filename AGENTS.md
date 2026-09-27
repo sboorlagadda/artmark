@@ -1,6 +1,6 @@
-# Artmark contributor guide
+# artmark contributor guide
 
-Read `spec.md` before changing product behavior. Artmark is a local registry of pointers and retrieval-oriented catalog cards. It must not store source documents, fetch providers itself, or require provider credentials.
+Read `spec.md` before changing product behavior. artmark is a local registry of pointers and retrieval-oriented catalog cards. It must not store source documents, fetch providers itself, or require provider credentials.
 
 ## Current delivery order
 

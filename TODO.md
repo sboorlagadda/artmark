@@ -1,4 +1,4 @@
-# Artmark implementation plan
+# artmark implementation plan
 
 The first delivery is a local Rust CLI with SQLite and FTS5. MCP and embeddings follow only after the CLI has been exercised with real artifacts.
 
@@ -55,6 +55,7 @@ The first delivery is a local Rust CLI with SQLite and FTS5. MCP and embeddings 
 - [x] Verify the README Linux installation commands in a fresh Ubuntu container.
 - [x] Set the GitHub description and topics; keep Discussions disabled.
 - [x] Prepare a 1280 × 640 social preview image under GitHub's 1 MB limit.
+- [x] Use lowercase `artmark` branding in prose, user-facing text, and the preview image.
 - [ ] After changing visibility to public, enable private vulnerability reporting and upload `docs/social-preview.png` in repository Settings.
 - [ ] After changing visibility to public, create an active `main` ruleset that requires PRs and the release-policy, lint, dependency audit, and four platform build checks.
 - [ ] After changing visibility to public, verify unauthenticated release downloads and installation instructions.

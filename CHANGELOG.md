@@ -1,6 +1,6 @@
 # Changelog
 
-Artmark follows [Semantic Versioning](https://semver.org/). During `0.x`, the CLI and database schema can change between minor releases.
+artmark follows [Semantic Versioning](https://semver.org/). During `0.x`, the CLI and database schema can change between minor releases.
 
 ## [0.1.0] - 2026-09-27
 

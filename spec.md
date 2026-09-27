@@ -1,4 +1,4 @@
-# Artmark
+# artmark
 
 ## Local Agent-Native Artifact Registry
 
@@ -13,7 +13,7 @@
 
 # 1. Product definition
 
-Artmark is a local artifact registry for AI agents.
+artmark is a local artifact registry for AI agents.
 
 It remembers **what artifacts exist, what they are about, and how an agent can retrieve them again**.
 
@@ -32,15 +32,15 @@ web
 etc.
 ```
 
-Artmark stores a durable catalog entry pointing to that artifact.
+artmark stores a durable catalog entry pointing to that artifact.
 
 The mental model is:
 
 ```text
-Artmark = Yellow Pages for artifacts
+artmark = Yellow Pages for artifacts
 ```
 
-An agent uses Artmark to answer:
+An agent uses artmark to answer:
 
 ```text
 "Have I seen something relevant to this before?"
@@ -56,7 +56,7 @@ Once the artifact is identified, the agent uses its existing provider-specific M
 
 # 2. Core workflow
 
-Artmark sits between agent sessions and external artifact systems.
+artmark sits between agent sessions and external artifact systems.
 
 ```text
                     USER / SESSION
@@ -80,7 +80,7 @@ Artmark sits between agent sessions and external artifact systems.
                          │
                          ▼
                     ┌─────────┐
-                    │ Artmark │
+                    │ artmark │
                     └────┬────┘
                          │
           metadata + search representation
@@ -100,7 +100,7 @@ User:
         artifact_search
               │
               ▼
-          Artmark
+          artmark
               │
        likely artifact
               │
@@ -115,13 +115,13 @@ User:
          current source
 ```
 
-Artmark's job ends when it successfully directs the agent to the correct artifact.
+artmark's job ends when it successfully directs the agent to the correct artifact.
 
 ---
 
 # 3. Key architectural principle
 
-Artmark stores:
+artmark stores:
 
 ```text
 artifact identity
@@ -133,7 +133,7 @@ provenance
 freshness hints
 ```
 
-Artmark does not normally store:
+artmark does not normally store:
 
 ```text
 full Google Doc contents
@@ -151,7 +151,7 @@ This distinction is fundamental.
 
 # 4. Why the agent performs ingestion
 
-Artmark must not become a collection of provider integrations.
+artmark must not become a collection of provider integrations.
 
 The agent already has tools capable of accessing providers.
 
@@ -176,13 +176,13 @@ last modified
 contents/topics/context
 
 Agent generates:
-Artmark catalog entry
+artmark catalog entry
 
 Agent calls:
 artifact_register
 ```
 
-Artmark never needs the user's Google OAuth credentials.
+artmark never needs the user's Google OAuth credentials.
 
 The same pattern works for:
 
@@ -198,7 +198,7 @@ local files
 future providers
 ```
 
-Provider support therefore largely lives in the **agent's tool ecosystem**, not Artmark.
+Provider support therefore largely lives in the **agent's tool ecosystem**, not artmark.
 
 ---
 
@@ -218,7 +218,7 @@ Agent:
 ```text
 resolve artifact
 understand enough for later retrieval
-register with Artmark
+register with artmark
 ```
 
 No separate bookmark-manager UI.
@@ -261,7 +261,7 @@ Agent:
 artifact_search("single screen onboarding")
 ```
 
-Artmark returns likely artifacts.
+artmark returns likely artifacts.
 
 Agent obtains the live artifact using the appropriate provider tool.
 
@@ -284,13 +284,13 @@ the user can say:
 Use the architecture docs related to Phoenix.
 ```
 
-The agent discovers them through Artmark.
+The agent discovers them through artmark.
 
 ---
 
 # 6. Non-goals
 
-Artmark v1 is not:
+artmark v1 is not:
 
 ```text
 a document database
@@ -337,7 +337,7 @@ presentation
 
 ## Artifact record
 
-The local Artmark record describing an artifact.
+The local artmark record describing an artifact.
 
 ---
 
@@ -360,7 +360,7 @@ Google Drive file ID
 
 ## Search card
 
-The compact semantic representation Artmark stores for retrieval.
+The compact semantic representation artmark stores for retrieval.
 
 The central field is:
 
@@ -376,11 +376,11 @@ It is an agent-generated description optimized for rediscovery.
 
 # 8. Search card philosophy
 
-The most important design decision in Artmark is the quality of `search_text`.
+The most important design decision in artmark is the quality of `search_text`.
 
 An artifact may contain 50,000 tokens.
 
-Artmark might store only 300–1,500 tokens describing it.
+artmark might store only 300–1,500 tokens describing it.
 
 Example source:
 
@@ -388,7 +388,7 @@ Example source:
 40-page architecture document
 ```
 
-Artmark search representation:
+artmark search representation:
 
 ```text
 Title: Enterprise Authentication Architecture V2
@@ -516,7 +516,7 @@ This distinction enables later regeneration of semantic metadata without changin
 
 # 11. Local storage
 
-Artmark should require exactly one primary durable file:
+artmark should require exactly one primary durable file:
 
 ```text
 ~/.artmark/artmark.db
@@ -548,7 +548,7 @@ No background daemon state.
 
 # 12. Storage philosophy
 
-SQLite is the canonical Artmark database.
+SQLite is the canonical artmark database.
 
 Within SQLite:
 
@@ -576,7 +576,7 @@ embeddings can be regenerated
 
 # 13. Artifact identity
 
-Every Artmark artifact gets an immutable internal ID.
+Every artmark artifact gets an immutable internal ID.
 
 Example:
 
@@ -596,7 +596,7 @@ or:
 ULID
 ```
 
-Artmark also stores a canonical external identity.
+artmark also stores a canonical external identity.
 
 Examples:
 
@@ -1219,7 +1219,7 @@ Agent environments may expose different tool names.
 
 # 30. Freshness model
 
-Artmark does not promise the catalog entry is current.
+artmark does not promise the catalog entry is current.
 
 It records:
 
@@ -1251,7 +1251,7 @@ No background synchronization is required.
 Preferred model:
 
 ```text
-search Artmark
+search artmark
      ↓
 find artifact
      ↓
@@ -1259,7 +1259,7 @@ retrieve from provider
      ↓
 agent notices meaningful source changes
      ↓
-refresh Artmark entry
+refresh artmark entry
 ```
 
 This keeps the catalog healthier naturally during real use.
@@ -1268,7 +1268,7 @@ This keeps the catalog healthier naturally during real use.
 
 # 32. Registration modes
 
-Artmark supports two levels.
+artmark supports two levels.
 
 ## Quick registration
 
@@ -1337,7 +1337,7 @@ User says:
 save this
 remember this
 bookmark this
-add this to Artmark
+add this to artmark
 ```
 
 Then:
@@ -1416,7 +1416,7 @@ update FTS
 
 v1 does not need full revision history.
 
-Keep only current Artmark metadata.
+Keep only current artmark metadata.
 
 Future option:
 
@@ -1475,7 +1475,7 @@ artmark add \
   https://docs.google.com/document/d/ABC/edit
 ```
 
-Artmark:
+artmark:
 
 ```text
 canonicalizes URL
@@ -1667,7 +1667,7 @@ Input:
 }
 ```
 
-Artmark canonicalizes further where possible.
+artmark canonicalizes further where possible.
 
 Returns artifact ID.
 
@@ -1717,7 +1717,7 @@ Input:
 }
 ```
 
-It may also accept URI/canonical key instead of Artmark ID.
+It may also accept URI/canonical key instead of artmark ID.
 
 ---
 
@@ -1803,29 +1803,29 @@ No external retrieval occurs.
 
 # 50. Agent skill
 
-Artmark should ship with a canonical agent skill.
+artmark should ship with a canonical agent skill.
 
 Suggested behavior:
 
 ```text
-# Artmark
+# artmark
 
-Artmark is a persistent local registry of artifacts.
+artmark is a persistent local registry of artifacts.
 
 Use it to remember what external artifacts exist and how to find them.
 
-Artmark does not contain authoritative artifact contents.
+artmark does not contain authoritative artifact contents.
 
 When the user explicitly asks to save or remember an artifact:
 
 1. Identify the artifact's provider and canonical identity.
 2. Use the best available provider tool to inspect it.
 3. Generate retrieval-oriented metadata.
-4. Register/index it with Artmark.
+4. Register/index it with artmark.
 
 When an artifact is already being read for the current task:
 
-1. Register or refresh it in Artmark at low additional cost.
+1. Register or refresh it in artmark at low additional cost.
 
 When an artifact is merely mentioned:
 
@@ -1834,11 +1834,11 @@ When an artifact is merely mentioned:
 
 Before asking the user for a previously provided document, design, repository, issue, or other artifact:
 
-1. Search Artmark.
+1. Search artmark.
 2. Inspect likely results.
 3. Retrieve the selected artifact from the authoritative provider using existing tools.
 
-Never treat Artmark's summary or search_text as authoritative current artifact contents.
+Never treat artmark's summary or search_text as authoritative current artifact contents.
 
 If current details matter, read the upstream artifact.
 ```
@@ -1985,7 +1985,7 @@ improve searchability, but they should not distort the artifact's meaning.
 
 # 55. Generic web URLs
 
-Artmark can support normal web bookmarks.
+artmark can support normal web bookmarks.
 
 For unknown URL:
 
@@ -1997,7 +1997,7 @@ The agent may use a browser/web tool to inspect the page.
 
 It then produces the same catalog representation.
 
-Artmark itself should not become a crawler.
+artmark itself should not become a crawler.
 
 ---
 
@@ -2087,13 +2087,13 @@ trait Embedder {
 }
 ```
 
-Artmark must work perfectly without an embedder.
+artmark must work perfectly without an embedder.
 
 ---
 
 # 60. Why no embedded model runtime initially
 
-Do not make Artmark ship:
+Do not make artmark ship:
 
 ```text
 PyTorch
@@ -2217,7 +2217,7 @@ preserve artifact records
 
 It must never require external providers.
 
-Everything necessary for Artmark's search index comes from the catalog records themselves.
+Everything necessary for artmark's search index comes from the catalog records themselves.
 
 This is an important invariant.
 
@@ -2253,7 +2253,7 @@ or CLI:
 artmark refresh-metadata <id> --stdin-json
 ```
 
-But Artmark itself does not retrieve the artifact.
+But artmark itself does not retrieve the artifact.
 
 ---
 
@@ -2311,12 +2311,12 @@ The search card should describe the artifact, not duplicate sensitive payloads.
 
 # 70. Source access remains authoritative
 
-Finding an Artmark entry does not imply current access to the source.
+Finding an artmark entry does not imply current access to the source.
 
 Example:
 
 ```text
-Artmark says:
+artmark says:
 Google Doc ABC exists.
 
 Google Drive MCP says:
@@ -2325,7 +2325,7 @@ Access denied.
 
 The provider wins.
 
-Artmark should never bypass provider permissions.
+artmark should never bypass provider permissions.
 
 ---
 
@@ -2337,7 +2337,7 @@ When:
 artmark forget ARTIFACT
 ```
 
-Artmark deletes:
+artmark deletes:
 
 ```text
 catalog record
@@ -2577,7 +2577,7 @@ Add:
 is_explicitly_saved INTEGER NOT NULL DEFAULT 0
 ```
 
-This lets Artmark distinguish:
+This lets artmark distinguish:
 
 ```text
 user deliberately saved this
@@ -2832,7 +2832,7 @@ Given indexed Google Doc,
 
 after deleting all agent session history,
 
-Artmark should contain:
+artmark should contain:
 
 ```text
 metadata
@@ -2849,14 +2849,14 @@ but not the original document body.
 Given:
 
 ```text
-Artmark catalog created Monday
+artmark catalog created Monday
 Google Doc modified Friday
 ```
 
 Saturday retrieval should:
 
 ```text
-find via Artmark
+find via artmark
 fetch from Google Drive
 use Friday's source
 ```
@@ -2869,7 +2869,7 @@ No synchronization step should be required.
 
 Given outdated `search_text`,
 
-Artmark may still identify the old artifact.
+artmark may still identify the old artifact.
 
 After agent retrieves the updated source and sees important semantic changes:
 
@@ -2893,7 +2893,7 @@ and
 https://docs.google.com/document/d/ABC/view
 ```
 
-Artmark must have exactly one artifact record.
+artmark must have exactly one artifact record.
 
 ---
 
@@ -2964,7 +2964,7 @@ Can the agent locate artifacts from vague descriptions
 that would previously have required searching old chats?
 ```
 
-If yes, Artmark is solving the intended problem.
+If yes, artmark is solving the intended problem.
 
 ---
 
@@ -2972,18 +2972,18 @@ If yes, Artmark is solving the intended problem.
 
 The most important sentence in the project documentation should be:
 
-> Artmark remembers how to find your artifacts; it does not replace the systems that contain them.
+> artmark remembers how to find your artifacts; it does not replace the systems that contain them.
 
 ---
 
 # 102. Architecture invariant
 
-Artmark must never require the underlying artifact to remain searchable.
+artmark must never require the underlying artifact to remain searchable.
 
 Once indexed:
 
 ```text
-Artmark has enough metadata
+artmark has enough metadata
 to rediscover the artifact locally.
 ```
 
@@ -2997,7 +2997,7 @@ the agent retrieves it from the source provider.
 
 # 103. Second architecture invariant
 
-Artmark must never require provider credentials.
+artmark must never require provider credentials.
 
 Provider retrieval belongs to:
 
@@ -3008,7 +3008,7 @@ plugins
 CLI tools already available to the agent
 ```
 
-Artmark receives only the resulting catalog information.
+artmark receives only the resulting catalog information.
 
 ---
 
@@ -3097,7 +3097,7 @@ Do not implement embeddings initially unless lexical retrieval clearly feels ins
                        ┌───────────────┴───────────────┐
                        │                               │
                        ▼                               ▼
-                Provider MCPs                     Artmark MCP
+                Provider MCPs                     artmark MCP
             Drive/Figma/GitHub/etc.                    │
                        │                               │
                        │ inspect                       │
@@ -3131,7 +3131,7 @@ Do not implement embeddings initially unless lexical retrieval clearly feels ins
 
 # 108. One-line positioning
 
-**Artmark is a local semantic registry that lets agents remember and rediscover the artifacts they encounter without copying or synchronizing the artifacts themselves.**
+**artmark is a local semantic registry that lets agents remember and rediscover the artifacts they encounter without copying or synchronizing the artifacts themselves.**
 
 ---
 
@@ -3161,4 +3161,4 @@ Does this help the agent:
 3. know how to retrieve the live artifact?
 ```
 
-If not, it probably does not belong in Artmark v1.
+If not, it probably does not belong in artmark v1.

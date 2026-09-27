@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package and verify the four native Artmark release archives."""
+"""Package and verify the four native artmark release archives."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def main() -> int:
         print(package(args.binary, args.target, version, args.dist))
     else:
         verify(args.dist, version)
-        print(f"Verified {len(TARGETS)} Artmark {version} release archives")
+        print(f"Verified {len(TARGETS)} artmark {version} release archives")
     return 0
 
 

@@ -14,7 +14,7 @@ body:
     id: proposal
     attributes:
       label: Proposed behavior
-      description: Describe what you would expect Artmark to do.
+      description: Describe what you would expect artmark to do.
     validations:
       required: true
   - type: textarea
