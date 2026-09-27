@@ -55,6 +55,7 @@ fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
         format!("https://example.com/file?X-Amz-Signature={secret}"),
         format!("https://example.com/file?sig={secret}"),
         format!("https://user:{secret}@example.com/file"),
+        format!("//user:{secret}@example.com/file"),
         format!("https://example.com/file?next=%2Fdownload%3Ftoken%3D{secret}"),
         format!(
             "https://example.com/file?next=https%253A%252F%252Fexample.org%252Ffile%253Ftoken%253D{secret}"

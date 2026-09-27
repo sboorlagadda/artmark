@@ -16,6 +16,9 @@ pub fn identify(input: &str) -> Result<Identity> {
     if input.is_empty() {
         bail!("artifact URI cannot be empty");
     }
+    if input.starts_with("//") {
+        bail!("scheme-relative artifact URLs are not supported");
+    }
     let mut url = match Url::parse(input) {
         Ok(url) => url,
         Err(url::ParseError::RelativeUrlWithoutBase) => {
@@ -433,6 +436,7 @@ mod tests {
             "https://example.com/file#next=https://user:secret@example.org/file?view=1",
             "https://example.com/file#https://user:secret@example.org/file",
             "https://user:secret@example.com/file",
+            "//user:secret@example.com/file",
             "file:///tmp/report?token=secret",
             "https://docs.google.com/document/d/ABC/edit?token=secret",
         ] {
