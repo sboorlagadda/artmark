@@ -1,8 +1,12 @@
+<img src="assets/logo.png" alt="artmark logo" width="72">
+
 # artmark
 
 **Early / v0.1:** artmark is usable, but the CLI, JSON output, and SQLite schema are not yet stable compatibility contracts.
 
 **A local bookmark manager for your agents.**
+
+![artmark connects artifacts from one agent session to a local search card and a live source in a later session](assets/hero-image.png)
 
 Your agent sees useful artifacts all day: Google Docs, Figma designs, GitHub issues, PDFs, web pages, local files, and more.
 
@@ -368,6 +372,8 @@ The core architecture will remain the same:
 ## Contributing
 
 Development setup, PR checks, and release versioning are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+The [brand kit](docs/brand-kit.md) contains the logo and graphics for launch posts.
 
 Issues, ideas, and pull requests are welcome.
 

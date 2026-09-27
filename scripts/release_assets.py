@@ -23,11 +23,16 @@ EXTRAS = (
     Path("README.md"),
     Path("SECURITY.md"),
     Path("CHANGELOG.md"),
+    Path("assets/logo.png"),
+    Path("assets/hero-image.png"),
+    Path("assets/social-image.png"),
+    Path("assets/social-preview.png"),
     Path("LICENSE"),
     Path("CONTRIBUTING.md"),
     Path("AGENTS.md"),
     Path("spec.md"),
     Path("docs/design.md"),
+    Path("docs/brand-kit.md"),
     Path("skills/artmark/SKILL.md"),
 )
 
