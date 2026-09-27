@@ -41,6 +41,7 @@ The first delivery is a local Rust CLI with SQLite and FTS5. MCP and embeddings 
 - [x] Validate scripts and workflows locally, then commit the release setup.
 - [x] Confirm the first hosted build and `v0.0.1` release.
 - [x] Check that each PR has exactly one release label matching its SemVer bump.
+- [x] Teach the bundled skill to install or upgrade the CLI from a verified GitHub Release.
 - [ ] Require the version, lint, and platform build checks in a `main` branch ruleset when the repository plan supports private-repository rulesets.
 
 ## Later milestones

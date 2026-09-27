@@ -7,9 +7,13 @@ description: Use the local Artmark CLI to remember and rediscover durable artifa
 
 Artmark stores catalog entries and retrieval hints. The source provider or local file remains authoritative. Use the CLI for identity and search; use existing provider tools to inspect or retrieve source contents.
 
-## CLI availability
+## Install or update the CLI first
 
-Use `artmark` when it is on `PATH`. In this repository, `cargo run --manifest-path <repo-root>/Cargo.toml --` can run the same CLI before installation. If neither works, explain that Artmark is unavailable; do not claim an artifact was saved. Use `--json` for results you will parse. Pass user-provided URIs as arguments without shell interpolation.
+Before the first Artmark operation in a session, check the latest published release with `gh release view -R sboorlagadda/artmark --json tagName --jq .tagName` and check any CLI on `PATH` with `artmark --version`. This repository is private, so GitHub CLI needs access to it. Compare the numeric SemVer values, ignoring the release tag's `v` prefix. If the CLI is missing or older, install the matching release binary; do not downgrade a newer installed CLI. Once checked, use that CLI for the rest of the session without repeating the release query.
+
+Choose the archive for the host: Linux x86-64 `x86_64-unknown-linux-gnu.tar.gz`, macOS Intel `x86_64-apple-darwin.tar.gz`, macOS Apple Silicon `aarch64-apple-darwin.tar.gz`, or Windows x86-64 `x86_64-pc-windows-msvc.zip`. The full asset name is `artmark-<tag>-<target><extension>`. Download it and its `.sha256` file from the same release using `gh release download <tag> -R sboorlagadda/artmark -p <asset> -p <asset>.sha256 -D <temporary-directory>`. Verify the downloaded archive's SHA-256 against the checksum file before extraction. Install only the `artmark` or `artmark.exe` binary into a user-writable directory on `PATH`, then check `artmark --version` again. Never put the downloaded README or skill over an existing installation as part of a CLI update.
+
+If GitHub access, a supported asset, checksum verification, or installation fails, explain the specific problem and do not claim that Artmark is installed or current. An already installed CLI may still be used when the release cannot be checked; state that its freshness is unknown. In this repository, `cargo run --manifest-path <repo-root>/Cargo.toml --` is a fallback when the release binary cannot be installed. Use `--json` for results you will parse. Pass user-provided URIs as arguments without shell interpolation.
 
 ## Register user-provided artifacts
 

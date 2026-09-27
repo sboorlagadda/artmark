@@ -66,7 +66,7 @@ artmark forget art_...
 
 ## Agent behavior
 
-The bundled Codex skill is at [skills/artmark/SKILL.md](skills/artmark/SKILL.md). To make it available outside this repository, copy the `skills/artmark` directory to `~/.codex/skills/artmark` and make sure the `artmark` CLI is on `PATH`. When working from this checkout, the skill can use `cargo run --manifest-path <repo-root>/Cargo.toml --` before the binary is installed.
+The bundled Codex skill is at [skills/artmark/SKILL.md](skills/artmark/SKILL.md). To make it available outside this repository, copy the `skills/artmark` directory to `~/.codex/skills/artmark`. On first use each session, the skill checks the latest GitHub Release and the installed CLI version, then installs or upgrades the matching release binary when needed. The repository is private, so `gh` must be installed and authenticated with access to `sboorlagadda/artmark`. When working from this checkout, the skill can use `cargo run --manifest-path <repo-root>/Cargo.toml --` if release installation is unavailable.
 
 The policy in [AGENTS.md](AGENTS.md) is to automatically quick-register durable artifacts supplied by the user. Explicit saves and user artifacts already read for a task should be indexed. An agent should ask before registering artifacts it found independently through searches. The skill applies this policy through the CLI.
 
