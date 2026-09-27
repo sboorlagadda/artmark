@@ -31,6 +31,16 @@ The first delivery is a local Rust CLI with SQLite and FTS5. MCP and embeddings 
 - [x] Update README with installation and usage examples.
 - [x] Commit each completed slice with a focused message.
 
+## 5. Cross-platform releases
+
+- [x] Set the initial CLI version to `0.0.1` in the manifest and lockfile.
+- [x] Enforce one patch, minor, or major version bump per PR.
+- [x] Build and test Linux, Windows, and both macOS architectures in GitHub Actions.
+- [x] Package binaries with checksums and publish a release for each new version on `main`.
+- [x] Document the version policy and release assets.
+- [x] Validate scripts and workflows locally, then commit the release setup.
+- [ ] Confirm the first hosted build and `v0.0.1` release.
+
 ## Later milestones
 
 - [ ] Add a stdio MCP interface for register, index, search, and get.

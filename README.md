@@ -77,3 +77,15 @@ Search cards should describe an artifact for later retrieval. They should never 
 `--json` keeps stdout valid JSON and sends diagnostics to stderr. Exit codes are `0` for success, `2` for invalid command arguments, `3` for a missing artifact, `4` for database or index failure, and `6` for invalid catalog input. FTS5 search works without embeddings. Search scores rank results locally; they are not probabilities.
 
 The SQLite database is the durable record. SQLite may create temporary WAL sidecar files while Artmark is running. Use SQLite's backup mechanism or a stopped database when making a consistent copy.
+
+## Releases and versioning
+
+The first CLI release is `0.0.1`. Each PR targeting `main` must advance the version in `Cargo.toml` by exactly one patch, minor, or major step. Run `cargo check` after editing the manifest so `Cargo.lock` matches. The [PR template](.github/pull_request_template.md) gives examples. One PR gets one bump, even if it contains several commits.
+
+- **Patch:** fixes, documentation, and internal changes (`0.0.1` → `0.0.2`).
+- **Minor:** new features and incompatible changes while the CLI is still in `0.x` development (`0.0.1` → `0.1.0`).
+- **Major:** the first stable public contract (`1.0.0`) and later incompatible changes.
+
+The [CLI workflow](.github/workflows/cli.yml) checks the version against the PR base and builds on Linux x86-64, Windows x86-64, macOS Intel, and macOS Apple Silicon. After a new version reaches `main`, successful builds are published as a `vX.Y.Z` GitHub Release. Each archive contains the CLI binary, this README, and the Artmark skill, with a matching `.sha256` file. A push that reuses a version already tagged at another commit fails the release job.
+
+Require the `Version bump`, `Format and lint`, and four platform build checks in the `main` branch ruleset to prevent an unchecked PR from merging. The workflow grants release publication permission only to the release job.

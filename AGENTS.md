@@ -13,6 +13,8 @@ Track work in `TODO.md` and update it when a task is completed. Make focused com
 
 The bundled agent workflow is in `skills/artmark/SKILL.md`; keep its CLI examples and registration policy aligned with this file and the shipped commands.
 
+For every PR targeting `main` after the initial `0.0.1` release, advance the CLI version by one SemVer step in `Cargo.toml` and update `Cargo.lock`. Follow the release guidance in `README.md`; a PR with multiple commits still gets one bump.
+
 ## Agent registration policy
 
 - Automatically register durable artifacts supplied by the user in prompts or during the session. Quick registration is sufficient when the artifact has not been inspected.

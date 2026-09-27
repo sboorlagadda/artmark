@@ -1,0 +1,134 @@
+name: CLI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Version bump
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Check one SemVer bump and lockfile
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python scripts/version_policy.py check-pr --base-sha "$BASE_SHA"
+
+  lint:
+    name: Format and lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            binary: target/release/artmark
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            binary: target/release/artmark
+          - os: macos-15
+            target: aarch64-apple-darwin
+            binary: target/release/artmark
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            binary: target/release/artmark.exe
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: Package executable
+        run: python scripts/release_assets.py pack --target "${{ matrix.target }}" --binary "${{ matrix.binary }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: artmark-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish versioned release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: artmark-*
+          merge-multiple: true
+          path: dist
+      - name: Verify all archives and checksums
+        run: python scripts/release_assets.py verify --dist dist
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(python scripts/version_policy.py current)"
+          tag="v${version}"
+          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "${tag}")"
+            if [[ "${tagged_commit}" != "${GITHUB_SHA}" ]]; then
+              echo "${tag} already points to ${tagged_commit}; bump the version before merging" >&2
+              exit 1
+            fi
+            if gh release view "${tag}" >/dev/null 2>&1; then
+              echo "${tag} is already released at this commit"
+              exit 0
+            fi
+            gh release create "${tag}" dist/* --verify-tag --title "${tag}" --generate-notes
+          else
+            gh release create "${tag}" dist/* --target "${GITHUB_SHA}" --title "${tag}" --generate-notes
+          fi

@@ -240,7 +240,11 @@ mod tests {
     #[test]
     fn bare_relative_file_path_is_supported() {
         let identity = identify("spec.md").unwrap();
-        assert!(identity.canonical_key.ends_with("/spec.md"));
+        let expected = std::env::current_dir().unwrap().join("spec.md");
+        assert_eq!(
+            identity.canonical_key,
+            format!("file:{}", expected.display())
+        );
         assert_eq!(identity.kind, "local_file");
     }
 }
