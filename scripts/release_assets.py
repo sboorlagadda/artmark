@@ -19,7 +19,14 @@ TARGETS = {
     "aarch64-apple-darwin": ("artmark", ".tar.gz"),
     "x86_64-pc-windows-msvc": ("artmark.exe", ".zip"),
 }
-EXTRAS = (Path("README.md"), Path("skills/artmark/SKILL.md"))
+EXTRAS = (
+    Path("README.md"),
+    Path("LICENSE"),
+    Path("CONTRIBUTING.md"),
+    Path("AGENTS.md"),
+    Path("spec.md"),
+    Path("skills/artmark/SKILL.md"),
+)
 
 
 def archive_name(version: str, target: str) -> str:
