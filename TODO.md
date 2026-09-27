@@ -45,6 +45,7 @@ The first delivery is a local Rust CLI with SQLite and FTS5. MCP and embeddings 
 - [x] Teach the bundled skill to install or upgrade the CLI from a verified GitHub Release.
 - [x] Add Apache-2.0 licensing, public-facing installation docs, contributor guidance, and GitHub About details.
 - [x] Enable Dependabot vulnerability alerts for Rust dependencies.
+- [x] Rewrite the README using the user-provided explanation of durable artifact bookmarks.
 
 ## Public launch follow-ups
 
