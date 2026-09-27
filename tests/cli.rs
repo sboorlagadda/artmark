@@ -57,8 +57,12 @@ fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
         format!("https://user:{secret}@example.com/file"),
         format!("https://example.com/file?next=%2Fdownload%3Ftoken%3D{secret}"),
         format!(
+            "https://example.com/file?next=https%253A%252F%252Fexample.org%252Ffile%253Ftoken%253D{secret}"
+        ),
+        format!(
             "https://example.com/file#next=https%3A%2F%2Fexample.org%2Ffile%3Ftoken%3D{secret}"
         ),
+        format!("https://example.com/file#https://user:{secret}@example.org/file"),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
             .args(["--database", db.to_str().unwrap(), "add", &uri, "--json"])
@@ -139,6 +143,27 @@ fn plain_credential_named_anchor_registers_as_an_alias() {
     assert_eq!(code, 0);
     assert_eq!(second["id"], first["id"]);
     assert_eq!(row_counts(&db), (1, 2, 1));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn ordinary_code_query_registers_and_deduplicates() {
+    let dir = std::env::temp_dir().join(format!("artmark-code-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+    let (code, first) = run(&db, &["add", "https://example.com/products?code=ABC"], None);
+    assert_eq!(code, 0);
+    let (code, duplicate) = run(
+        &db,
+        &["add", "https://EXAMPLE.com/products?code=ABC#details"],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(duplicate["id"], first["id"]);
+    let (code, distinct) = run(&db, &["add", "https://example.com/products?code=XYZ"], None);
+    assert_eq!(code, 0);
+    assert_ne!(distinct["id"], first["id"]);
+    assert_eq!(row_counts(&db), (2, 3, 2));
     fs::remove_dir_all(dir).unwrap();
 }
 

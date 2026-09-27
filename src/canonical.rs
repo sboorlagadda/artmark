@@ -154,16 +154,19 @@ fn validate_locator_at_depth(url: &Url, depth: usize) -> Result<()> {
     if !url.username().is_empty() || url.password().is_some() {
         bail!("artifact URL contains credentials");
     }
+    let oauth_context = is_oauth_context(url);
     let has_credentials = url
         .query_pairs()
-        .any(|(name, value)| has_credential_parameter(url, &name, &value, depth));
+        .any(|(name, value)| has_credential_parameter(url, &name, &value, depth, oauth_context));
     let fragment_has_credentials = url.fragment().is_some_and(|fragment| {
         let contains_credentials = |parameters: &str| {
             parameters.contains('=')
-                && url::form_urlencoded::parse(parameters.as_bytes())
-                    .any(|(name, value)| has_credential_parameter(url, &name, &value, depth))
+                && url::form_urlencoded::parse(parameters.as_bytes()).any(|(name, value)| {
+                    has_credential_parameter(url, &name, &value, depth, oauth_context)
+                })
         };
-        contains_credentials(fragment)
+        has_nested_locator(url, fragment, depth)
+            || contains_credentials(fragment)
             || fragment
                 .rsplit_once('?')
                 .is_some_and(|(_, tail)| contains_credentials(tail))
@@ -174,22 +177,99 @@ fn validate_locator_at_depth(url: &Url, depth: usize) -> Result<()> {
     Ok(())
 }
 
-fn has_credential_parameter(url: &Url, name: &str, value: &str, depth: usize) -> bool {
-    if is_credential_parameter(name) {
-        return true;
-    }
-    // Join only locator-shaped values. Joining an empty value would reproduce
-    // the containing URL and incorrectly reject a harmless empty parameter.
-    let looks_like_locator = value.starts_with('/')
-        || value.starts_with('?')
-        || value.starts_with("./")
-        || value.starts_with("../")
-        || value.contains("://")
-        || value.contains('?');
-    looks_like_locator
-        && url.join(value).is_ok_and(|nested| {
-            depth >= 3 || validate_locator_at_depth(&nested, depth + 1).is_err()
+fn is_oauth_context(url: &Url) -> bool {
+    let has_state = url
+        .query_pairs()
+        .any(|(name, _)| name.eq_ignore_ascii_case("state"))
+        || url.fragment().is_some_and(|fragment| {
+            let contains_state = |parameters: &str| {
+                url::form_urlencoded::parse(parameters.as_bytes())
+                    .any(|(name, _)| name.eq_ignore_ascii_case("state"))
+            };
+            contains_state(fragment)
+                || fragment
+                    .rsplit_once('?')
+                    .is_some_and(|(_, tail)| contains_state(tail))
+        });
+    has_state
+        || url.path_segments().is_some_and(|mut segments| {
+            segments.any(|segment| {
+                [
+                    "oauth",
+                    "authorize",
+                    "callback",
+                    "cb",
+                    "login",
+                    "signin",
+                    "auth",
+                    "sso",
+                ]
+                .iter()
+                .any(|part| segment.eq_ignore_ascii_case(part))
+            })
         })
+}
+
+fn has_credential_parameter(
+    url: &Url,
+    name: &str,
+    value: &str,
+    depth: usize,
+    oauth_context: bool,
+) -> bool {
+    is_credential_parameter(name)
+        || (oauth_context && name.eq_ignore_ascii_case("code"))
+        || has_nested_locator(url, value, depth)
+}
+
+fn has_nested_locator(url: &Url, value: &str, depth: usize) -> bool {
+    let mut candidate = value.to_owned();
+    for _ in 0..=8 {
+        // Join only locator-shaped values. Joining an empty value would reproduce
+        // the containing URL and incorrectly reject a harmless empty parameter.
+        let looks_like_locator = candidate.starts_with('/')
+            || candidate.starts_with('?')
+            || candidate.starts_with("./")
+            || candidate.starts_with("../")
+            || candidate.contains("://")
+            || candidate.contains('?');
+        if looks_like_locator
+            && url.join(&candidate).is_ok_and(|nested| {
+                depth >= 3 || validate_locator_at_depth(&nested, depth + 1).is_err()
+            })
+        {
+            return true;
+        }
+        let decoded = percent_decode_once(&candidate);
+        if decoded == candidate {
+            return false;
+        }
+        candidate = decoded;
+    }
+    // Excessive encoding makes the locator ambiguous; do not persist it.
+    true
+}
+
+fn percent_decode_once(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (
+                (bytes[index + 1] as char).to_digit(16),
+                (bytes[index + 2] as char).to_digit(16),
+            )
+        {
+            decoded.push((high * 16 + low) as u8);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn is_credential_parameter(name: &str) -> bool {
@@ -218,7 +298,6 @@ fn is_credential_parameter(name: &str) -> bool {
                 | "auth"
                 | "authkey"
                 | "authorization"
-                | "code"
                 | "credential"
                 | "signature"
                 | "sig"
@@ -321,6 +400,17 @@ mod tests {
     }
 
     #[test]
+    fn generic_code_query_identifies_distinct_artifacts() {
+        let first = identify("https://example.com/products?code=ABC").unwrap();
+        let same = identify("https://EXAMPLE.com/products?code=ABC#details").unwrap();
+        let second = identify("https://example.com/products?code=XYZ").unwrap();
+        assert_eq!(first.canonical_key, same.canonical_key);
+        assert_ne!(first.canonical_key, second.canonical_key);
+        assert!(identify("https://example.com/callback?code=secret").is_err());
+        assert!(identify("https://example.com/file?code=secret#section?state=abc").is_err());
+    }
+
+    #[test]
     fn credential_parameters_and_userinfo_are_rejected() {
         for uri in [
             "https://example.com/file?token=secret",
@@ -335,11 +425,13 @@ mod tests {
             "https://example.com/redirect?next=%2Fdownload%3Ftoken%3Dsecret",
             "https://example.com/redirect?next=%2F%2Fexample.org%2Ffile%3Fsig%3Dsecret",
             "https://example.com/redirect?next=download%3Ftoken%3Dsecret",
+            "https://example.com/redirect?next=https%253A%252F%252Fexample.org%252Ffile%253Ftoken%253Dsecret",
             "https://example.com/file#access_token=secret",
             "https://example.com/file#section?session_id=secret",
             "https://example.com/file#next=https%3A%2F%2Fexample.org%2Ffile%3Ftoken%3Dsecret",
             "https://example.com/file#next=%2Fdownload%3Ftoken%3Dsecret",
             "https://example.com/file#next=https://user:secret@example.org/file?view=1",
+            "https://example.com/file#https://user:secret@example.org/file",
             "https://user:secret@example.com/file",
             "file:///tmp/report?token=secret",
             "https://docs.google.com/document/d/ABC/edit?token=secret",
