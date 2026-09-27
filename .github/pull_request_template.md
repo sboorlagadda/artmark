@@ -1,6 +1,6 @@
 ## Release version
 
-Every PR to `main` increments the Artmark CLI version once. Update `version` in `Cargo.toml`, then run `cargo check` to update `Cargo.lock`.
+Every PR to `main` increments the Artmark CLI version once. Update `version` in `Cargo.toml`, then run `cargo check` to update `Cargo.lock`. See `CONTRIBUTING.md` for the full contributor workflow.
 Add exactly one matching release label to this PR: `semver:patch`, `semver:minor`, or `semver:major`.
 
 - **Patch** (`0.0.1` → `0.0.2`): fixes, documentation, and internal changes.
