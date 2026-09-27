@@ -1,15 +1,15 @@
 # artmark contributor guide
 
-Read `spec.md` before changing product behavior. artmark is a local registry of pointers and retrieval-oriented catalog cards. It must not store source documents, fetch providers itself, or require provider credentials.
+Read `docs/design.md` and the relevant GitHub issues before changing product behavior. artmark is a local registry of pointers and retrieval-oriented catalog cards. It must not store source documents, fetch providers itself, or require provider credentials.
 
 ## Current delivery order
 
-1. Build the Rust CLI and SQLite registry.
-2. Add useful FTS5 search to that CLI.
-3. Add MCP only after the CLI path works end to end.
-4. Keep embeddings optional and out of the first implementation.
+1. Finish the first public CLI release and verify clean installation.
+2. Evaluate the shipped FTS5 search with real queries.
+3. Define and add MCP after the CLI path works end to end.
+4. Consider embeddings only after evaluating lexical retrieval; keep them optional.
 
-Track work in `TODO.md` and update it when a task is completed. Make focused commits after a coherent piece of work passes its relevant checks. Create a branch and open a PR for each change to `main`; do not push changes directly to `main`.
+Track work in GitHub issues and update or close them when tasks are completed. Make focused commits after a coherent piece of work passes its relevant checks. Create a branch and open a PR for each change to `main`; do not push changes directly to `main`.
 
 The bundled agent workflow is in `skills/artmark/SKILL.md`; keep its CLI examples and registration policy aligned with this file and the shipped commands.
 

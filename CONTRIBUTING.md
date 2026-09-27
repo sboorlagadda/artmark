@@ -1,6 +1,6 @@
 # Contributing to artmark
 
-Thanks for helping improve artmark. It is a local catalog of pointers and search cards. Please read [AGENTS.md](AGENTS.md) and [spec.md](spec.md) before changing product behavior: artmark does not store source documents or retrieve them from providers.
+Thanks for helping improve artmark. It is a local catalog of pointers and search cards. Please read [AGENTS.md](AGENTS.md), [the design guide](docs/design.md), and relevant GitHub issues before changing product behavior: artmark does not store source documents or retrieve them from providers.
 
 ## Develop locally
 
@@ -33,4 +33,4 @@ Dependabot vulnerability alerts are enabled for this repository. When addressing
 
 ## Releases
 
-A successful push to `main` builds and tests the CLI on Linux x86-64, Windows x86-64, macOS Intel, and macOS Apple Silicon. The workflow publishes the new `vX.Y.Z` release after all four archives and checksums pass verification. Each archive includes the binary, README, security policy, changelog, design and contributor guidance, spec, and agent skill. GitHub Releases are the primary install channel; the crate is not published to crates.io.
+A successful push to `main` builds and tests the CLI on Linux x86-64, Windows x86-64, macOS Intel, and macOS Apple Silicon. The workflow publishes the new `vX.Y.Z` release after all four archives and checksums pass verification. Each archive includes the binary, README, security policy, changelog, design and contributor guidance, brand assets, and agent skill. GitHub Releases are the primary install channel; the crate is not published to crates.io.

@@ -10,6 +10,7 @@ First public release. The CLI and local SQLite FTS5 catalog are available on Lin
 - Documented early maturity, a complete install path, and macOS Gatekeeper behavior.
 - Added dependency auditing and clean-install smoke tests to release CI.
 - Added the supplied brand logo, README hero illustration, social graphic, and brand kit.
+- Moved the remaining design and task notes into the design guide and GitHub issues.
 
 ## [0.0.4] - 2026-09-27
 

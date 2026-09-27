@@ -239,8 +239,8 @@ mod tests {
 
     #[test]
     fn bare_relative_file_path_is_supported() {
-        let identity = identify("spec.md").unwrap();
-        let expected = std::env::current_dir().unwrap().join("spec.md");
+        let identity = identify("README.md").unwrap();
+        let expected = std::env::current_dir().unwrap().join("README.md");
         assert_eq!(
             identity.canonical_key,
             format!("file:{}", expected.display())
