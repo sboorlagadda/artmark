@@ -4,12 +4,15 @@ This page records the brand choices and the supplied image assets. The product n
 
 | Asset | Use |
 | --- | --- |
-| [logo.png](../assets/logo.png) | Canonical transparent mark; keep the ivory document/bookmark and mint square together. |
+| [logo.png](../assets/logo.png) | Supplied transparent, full-color symbol in PNG form. |
+| [logo-symbol.svg](../assets/logo-symbol.svg) | Scalable full-color symbol for dark surfaces. |
+| [logo-wordmark.svg](../assets/logo-wordmark.svg) | Horizontal symbol plus lowercase `artmark` for dark surfaces. |
+| [logo-monochrome.svg](../assets/logo-monochrome.svg) | Single-color navy symbol for light surfaces and small icons. |
 | [hero-image.png](../assets/hero-image.png) | README illustration of first session, local catalog, and later retrieval. |
 | [social-image.png](../assets/social-image.png) | 16:9 graphic for launch posts. |
 | [social-preview.png](../assets/social-preview.png) | 2:1 GitHub repository preview; upload through repository Settings when public. |
 
-<img src="../assets/logo.png" alt="artmark bookmark logo" width="96">
+<img src="../assets/logo-monochrome.svg" alt="artmark monochrome bookmark logo" width="72">
 
 ## Brand rules
 
@@ -64,7 +67,7 @@ Your primary logo should be exactly what you now have:
 
 Do not make the navy square/background part of the logo.
 
-The supplied file is the full-color mark. If monochrome versions are needed later, use ivory for dark backgrounds and navy for light backgrounds; the mint square may disappear in those versions.
+The supplied `logo.png` is the full-color raster mark. The SVG symbol and wordmark are scalable versions for dark backgrounds. The monochrome mark is navy for light backgrounds and omits the mint square so it remains truly single-color.
 
 Avoid shadows, glows, outlines, or containers in the canonical logo file. Those effects belong to illustrations, not the mark itself.
 
@@ -77,7 +80,7 @@ I would keep this very simple.
 **Marketing/UI:** Manrope
 **Code/CLI:** JetBrains Mono
 
-The `artmark` wordmark can remain custom/stylized rather than being recreated in Manrope.
+The SVG wordmark uses a heavy, compact sans-serif lockup. Its text remains editable; convert it to outlines before sending it to a print vendor if exact letter shapes must be locked down.
 
 Use heavier weights for headlines and normal/medium weights everywhere else. Avoid overly futuristic typefaces—the product's strength is that it feels practical.
 
