@@ -3,7 +3,7 @@ name: CLI
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, edited, ready_for_review]
+    types: [opened, synchronize, reopened, edited, ready_for_review, labeled, unlabeled]
   push:
     branches: [main]
   workflow_dispatch:
@@ -27,6 +27,7 @@ jobs:
       - name: Check one SemVer bump and lockfile
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels) }}
         run: python scripts/version_policy.py check-pr --base-sha "$BASE_SHA"
 
   lint:

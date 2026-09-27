@@ -9,11 +9,11 @@ Read `spec.md` before changing product behavior. Artmark is a local registry of 
 3. Add MCP only after the CLI path works end to end.
 4. Keep embeddings optional and out of the first implementation.
 
-Track work in `TODO.md` and update it when a task is completed. Make focused commits after a coherent piece of work passes its relevant checks.
+Track work in `TODO.md` and update it when a task is completed. Make focused commits after a coherent piece of work passes its relevant checks. Create a branch and open a PR for each change to `main`; do not push changes directly to `main`.
 
 The bundled agent workflow is in `skills/artmark/SKILL.md`; keep its CLI examples and registration policy aligned with this file and the shipped commands.
 
-For every PR targeting `main` after the initial `0.0.1` release, advance the CLI version by one SemVer step in `Cargo.toml` and update `Cargo.lock`. Follow the release guidance in `README.md`; a PR with multiple commits still gets one bump.
+For every PR targeting `main` after the initial `0.0.1` release, advance the CLI version by one SemVer step in `Cargo.toml` and update `Cargo.lock`. Add exactly one matching `semver:patch`, `semver:minor`, or `semver:major` PR label. Follow the release guidance in `README.md`; a PR with multiple commits still gets one bump. Confirm that the `Version bump`, `Format and lint`, and all four build checks pass before merging.
 
 ## Agent registration policy
 
