@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/sboorlagadda/artmark/security/advisories/new
+    about: Follow SECURITY.md and do not post vulnerability details in an issue.

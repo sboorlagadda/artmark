@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a reproducible Artmark problem
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "For security vulnerabilities, use the private channel in SECURITY.md. Remove secrets and private artifact data from this report."
+  - type: input
+    id: version
+    attributes:
+      label: Artmark version
+      description: Output of `artmark --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Linux x86-64, macOS Intel, macOS Apple Silicon, Windows x86-64, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the command and sanitized input.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error output with private paths, links, and metadata removed.
+    validations:
+      required: true

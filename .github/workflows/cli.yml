@@ -7,6 +7,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: '23 7 * * 1'
 
 permissions:
   contents: read
@@ -18,6 +20,7 @@ concurrency:
 jobs:
   lint:
     name: Format and lint
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -36,6 +39,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
+    if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -67,8 +71,9 @@ jobs:
       - run: cargo test --locked
       - run: cargo build --release --locked
       - name: Package executable
-        if: github.event_name == 'push'
         run: python scripts/release_assets.py pack --target "${{ matrix.target }}" --binary "${{ matrix.binary }}"
+      - name: Clean-user install smoke test
+        run: python scripts/install_smoke.py --target "${{ matrix.target }}"
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'push'
         with:
@@ -77,10 +82,24 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+
   release:
     name: Publish versioned release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, build]
+    needs: [lint, build, audit]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

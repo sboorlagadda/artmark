@@ -1,5 +1,7 @@
 # Artmark
 
+**Early / v0.1:** Artmark is usable, but the CLI, JSON output, and SQLite schema are not yet stable compatibility contracts.
+
 **A local bookmark manager for your agents.**
 
 Your agent sees useful artifacts all day: Google Docs, Figma designs, GitHub issues, PDFs, web pages, local files, and more.
@@ -146,7 +148,8 @@ Artmark is intentionally small.
 The catalog lives in:
 
 ```text
-~/.artmark/artmark.db
+$HOME/.artmark/artmark.db (macOS and Linux)
+%USERPROFILE%\.artmark\artmark.db (Windows)
 ```
 
 Search uses SQLite FTS5.
@@ -168,7 +171,7 @@ The agent's provider tools remain responsible for retrieving current source cont
 
 ## Install
 
-Download the latest prebuilt binary from [GitHub Releases](https://github.com/sboorlagadda/artmark/releases/latest).
+Download the latest prebuilt binary and its matching `.sha256` file from [GitHub Releases](https://github.com/sboorlagadda/artmark/releases/latest). These instructions use the `v0.1.0` filenames; substitute the filenames shown on the latest release if it is newer.
 
 Pick the archive for your machine:
 
@@ -179,38 +182,54 @@ Pick the archive for your machine:
 | macOS Apple Silicon | `aarch64-apple-darwin.tar.gz` |
 | Windows x86-64 | `x86_64-pc-windows-msvc.zip` |
 
-Each archive has a matching `.sha256` file.
-
-Verify the archive before extracting it. Then put `artmark` (or `artmark.exe`) on your `PATH` and run:
+From a terminal in the directory containing both downloaded files, use the commands for your system. On Linux x86-64:
 
 ```bash
+archive=artmark-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+sha256sum -c "$archive.sha256"
+mkdir -p "$HOME/.local/bin"
+tar -xzf "$archive" -C "$HOME/.local/bin" artmark
+export PATH="$HOME/.local/bin:$PATH"
 artmark --version
 ```
 
-On Linux:
+On macOS, choose **one** archive name: `artmark-v0.1.0-aarch64-apple-darwin.tar.gz` for Apple Silicon or `artmark-v0.1.0-x86_64-apple-darwin.tar.gz` for Intel. Then run:
 
 ```bash
-sha256sum -c ARCHIVE.sha256
+archive=artmark-v0.1.0-aarch64-apple-darwin.tar.gz  # change to Intel filename if needed
+shasum -a 256 -c "$archive.sha256"
+mkdir -p "$HOME/.local/bin"
+tar -xzf "$archive" -C "$HOME/.local/bin" artmark
+export PATH="$HOME/.local/bin:$PATH"
+artmark --version
 ```
 
-On macOS:
+Add `$HOME/.local/bin` to your shell's `PATH` configuration if you want `artmark` available in future terminal sessions.
 
-```bash
-shasum -a 256 -c ARCHIVE.sha256
-```
+**macOS Gatekeeper:** The release binaries are currently **unsigned and not notarized**. macOS may block the first run with “Apple cannot check it for malicious software” or an unidentified-developer warning. After verifying the release checksum and attempting to run `artmark --version`, open **System Settings → Privacy & Security**, select **Open Anyway** for `artmark`, and confirm **Open**. If macOS reports that the binary is damaged or will harm your computer, do not override that warning; download a fresh archive and verify its checksum again. See [Apple's Gatekeeper instructions](https://support.apple.com/en-us/102445).
 
-On Windows, compare:
+On Windows x86-64, in PowerShell from the directory containing the downloads:
 
 ```powershell
-(Get-FileHash ARCHIVE -Algorithm SHA256).Hash
+$archive = 'artmark-v0.1.0-x86_64-pc-windows-msvc.zip'
+$expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
+$actual = (Get-FileHash $archive -Algorithm SHA256).Hash
+if ($actual -ne $expected) { throw 'Checksum mismatch' }
+$bin = Join-Path $HOME '.local\bin'
+New-Item -ItemType Directory -Force $bin | Out-Null
+Expand-Archive $archive -DestinationPath $bin -Force
+$env:PATH = "$bin;$env:PATH"
+artmark --version
 ```
 
-with the digest in the checksum file.
+Add `%USERPROFILE%\.local\bin` to your user `PATH` to use `artmark` in future terminals.
 
 Rust users can also build from source:
 
 ```bash
-cargo install --path .
+git clone https://github.com/sboorlagadda/artmark.git
+cd artmark
+cargo install --locked --path .
 ```
 
 ## Try it
@@ -277,7 +296,8 @@ for all commands, options, and filters.
 Artmark's default database is:
 
 ```text
-~/.artmark/artmark.db
+$HOME/.artmark/artmark.db (macOS and Linux)
+%USERPROFILE%\.artmark\artmark.db (Windows)
 ```
 
 Use:
@@ -301,6 +321,8 @@ Artmark does not store provider credentials.
 It does not need Google, Figma, GitHub, or other provider authentication. Those responsibilities remain with the agent harness or tools that already have access.
 
 Back up a stopped database or use SQLite's backup mechanism for a consistent copy.
+
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting and [docs/design.md](docs/design.md) for the registry design.
 
 ## Agent-friendly CLI behavior
 
@@ -327,7 +349,7 @@ Search scores are local ranking scores, not probabilities.
 
 ## Status
 
-Artmark is early.
+Artmark is an early `v0.1` release. CLI behavior, JSON fields, and the local database schema may change before `1.0`.
 
 The CLI and local FTS5 catalog are available now.
 

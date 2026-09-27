@@ -76,3 +76,26 @@ fn cli_registry_and_fts_work_end_to_end() {
     assert_eq!(empty["results"].as_array().unwrap().len(), 0);
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn default_database_uses_platform_home() {
+    let home = std::env::temp_dir().join(format!("artmark-home-{}", Uuid::now_v7()));
+    fs::create_dir_all(&home).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_artmark"));
+    command.env_remove("ARTMARK_DB").env_remove("HOME");
+    #[cfg(windows)]
+    command.env("USERPROFILE", &home);
+    #[cfg(not(windows))]
+    command.env("HOME", &home);
+    let output = command
+        .args(["add", "https://example.com/fresh-install", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(home.join(".artmark/artmark.db").is_file());
+    fs::remove_dir_all(home).unwrap();
+}

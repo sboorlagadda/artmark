@@ -21,10 +21,13 @@ TARGETS = {
 }
 EXTRAS = (
     Path("README.md"),
+    Path("SECURITY.md"),
+    Path("CHANGELOG.md"),
     Path("LICENSE"),
     Path("CONTRIBUTING.md"),
     Path("AGENTS.md"),
     Path("spec.md"),
+    Path("docs/design.md"),
     Path("skills/artmark/SKILL.md"),
 )
 

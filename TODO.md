@@ -49,8 +49,16 @@ The first delivery is a local Rust CLI with SQLite and FTS5. MCP and embeddings 
 
 ## Public launch follow-ups
 
-- [ ] After changing visibility to public, create an active `main` ruleset that requires PRs and the release-policy, lint, and four platform build checks.
+- [x] Prepare `v0.1.0` with a changelog, security policy, issue templates, early-maturity notice, and architecture guide.
+- [x] Add dependency auditing and clean-user archive installation checks to CI.
+- [x] Use the platform home directory for the default database, including `%USERPROFILE%` on Windows.
+- [x] Verify the README Linux installation commands in a fresh Ubuntu container.
+- [x] Set the GitHub description and topics; keep Discussions disabled.
+- [x] Prepare a 1280 × 640 social preview image under GitHub's 1 MB limit.
+- [ ] After changing visibility to public, enable private vulnerability reporting and upload `docs/social-preview.png` in repository Settings.
+- [ ] After changing visibility to public, create an active `main` ruleset that requires PRs and the release-policy, lint, dependency audit, and four platform build checks.
 - [ ] After changing visibility to public, verify unauthenticated release downloads and installation instructions.
+- [ ] Confirm the `v0.1.0` PR checks, merge, and verify its release tag and four archives.
 
 ## Later milestones
 
