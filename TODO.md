@@ -42,14 +42,15 @@ The first delivery is a local Rust CLI with SQLite and FTS5. MCP and embeddings 
 - [x] Confirm the first hosted build and `v0.0.1` release.
 - [x] Check that each PR has exactly one release label matching its SemVer bump.
 - [x] Rerun only the release-policy check on label edits and cancel superseded PR builds.
-- [x] Teach the bundled skill to install or upgrade the CLI from a verified GitHub Release.
+- [x] Supersede automatic skill installation and upgrades with an availability-only check; keep setup explicit.
 - [x] Add Apache-2.0 licensing, public-facing installation docs, contributor guidance, and GitHub About details.
 - [x] Enable Dependabot vulnerability alerts for Rust dependencies.
+- [x] Rewrite the README using the user-provided explanation of durable artifact bookmarks.
 
 ## Public launch follow-ups
 
 - [ ] After changing visibility to public, create an active `main` ruleset that requires PRs and the release-policy, lint, and four platform build checks.
-- [ ] After changing visibility to public, verify unauthenticated release downloads and remove the temporary private-access wording from the README and agent skill.
+- [ ] After changing visibility to public, verify unauthenticated release downloads and installation instructions.
 
 ## Later milestones
 
