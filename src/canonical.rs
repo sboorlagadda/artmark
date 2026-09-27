@@ -17,11 +17,17 @@ pub fn identify(input: &str) -> Result<Identity> {
         bail!("artifact URI cannot be empty");
     }
     if input.starts_with("//") {
-        bail!("scheme-relative artifact URLs are not supported");
+        let network = Url::parse(&format!("https:{input}"))
+            .map_err(|_| anyhow::anyhow!("invalid scheme-relative locator"))?;
+        validate_locator(&network)?;
+        return local_path(Path::new(input), input);
     }
     let mut url = match Url::parse(input) {
         Ok(url) => url,
         Err(url::ParseError::RelativeUrlWithoutBase) => {
+            if has_nested_url_in_text(input, 0) {
+                bail!("artifact URI contains credentials");
+            }
             return local_path(Path::new(input), input);
         }
         Err(error) => return Err(error.into()),
@@ -174,10 +180,40 @@ fn validate_locator_at_depth(url: &Url, depth: usize) -> Result<()> {
                 .rsplit_once('?')
                 .is_some_and(|(_, tail)| contains_credentials(tail))
     });
-    if has_credentials || fragment_has_credentials {
+    if has_credentials || fragment_has_credentials || has_nested_url_in_text(url.path(), depth) {
         bail!("artifact URL contains credentials");
     }
     Ok(())
+}
+
+fn has_nested_url_in_text(text: &str, depth: usize) -> bool {
+    let mut path = text.to_owned();
+    for _ in 0..=8 {
+        let lower = path.to_ascii_lowercase();
+        for (index, _) in path.char_indices() {
+            let tail = &path[index..];
+            let lower_tail = &lower[index..];
+            let nested = if lower_tail.starts_with("https://") || lower_tail.starts_with("http://")
+            {
+                Url::parse(tail).ok()
+            } else if tail.starts_with("//") {
+                Url::parse(&format!("https:{tail}")).ok()
+            } else {
+                None
+            };
+            if nested.is_some_and(|nested| {
+                depth >= 3 || validate_locator_at_depth(&nested, depth + 1).is_err()
+            }) {
+                return true;
+            }
+        }
+        let decoded = percent_decode_once(&path);
+        if decoded == path {
+            return false;
+        }
+        path = decoded;
+    }
+    true
 }
 
 fn is_oauth_context(url: &Url) -> bool {
@@ -403,6 +439,14 @@ mod tests {
     }
 
     #[test]
+    fn safe_double_slash_paths_remain_local_paths() {
+        for path in ["//localhost/artmark-missing/file", "///tmp/artmark-file"] {
+            let identity = identify(path).unwrap();
+            assert_eq!(identity.provider.as_deref(), Some("filesystem"));
+        }
+    }
+
+    #[test]
     fn generic_code_query_identifies_distinct_artifacts() {
         let first = identify("https://example.com/products?code=ABC").unwrap();
         let same = identify("https://EXAMPLE.com/products?code=ABC#details").unwrap();
@@ -435,6 +479,9 @@ mod tests {
             "https://example.com/file#next=%2Fdownload%3Ftoken%3Dsecret",
             "https://example.com/file#next=https://user:secret@example.org/file?view=1",
             "https://example.com/file#https://user:secret@example.org/file",
+            "https://proxy.example/https://user:secret@example.org/file",
+            "https://proxy.example/https%3A%2F%2Fuser%3Asecret%40example.org%2Ffile",
+            "archive/https://user:secret@example.org/file",
             "https://user:secret@example.com/file",
             "//user:secret@example.com/file",
             "file:///tmp/report?token=secret",

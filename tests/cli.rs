@@ -64,6 +64,9 @@ fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
             "https://example.com/file#next=https%3A%2F%2Fexample.org%2Ffile%3Ftoken%3D{secret}"
         ),
         format!("https://example.com/file#https://user:{secret}@example.org/file"),
+        format!("https://proxy.example/https://user:{secret}@example.org/file"),
+        format!("https://proxy.example/https%3A%2F%2Fuser%3A{secret}%40example.org%2Ffile"),
+        format!("archive/https://user:{secret}@example.org/file"),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
             .args(["--database", db.to_str().unwrap(), "add", &uri, "--json"])
@@ -144,6 +147,19 @@ fn plain_credential_named_anchor_registers_as_an_alias() {
     assert_eq!(code, 0);
     assert_eq!(second["id"], first["id"]);
     assert_eq!(row_counts(&db), (1, 2, 1));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn safe_double_slash_path_registers_as_filesystem_artifact() {
+    let dir = std::env::temp_dir().join(format!("artmark-unc-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+    let (code, added) = run(&db, &["add", "//localhost/artmark-missing/file"], None);
+    assert_eq!(code, 0);
+    let (_, artifact) = run(&db, &["get", added["id"].as_str().unwrap()], None);
+    assert_eq!(artifact["provider"], "filesystem");
+    assert_eq!(row_counts(&db), (1, 1, 1));
     fs::remove_dir_all(dir).unwrap();
 }
 
