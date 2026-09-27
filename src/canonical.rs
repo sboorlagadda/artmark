@@ -159,8 +159,9 @@ fn validate_locator_at_depth(url: &Url, depth: usize) -> Result<()> {
         .any(|(name, value)| has_credential_parameter(url, &name, &value, depth));
     let fragment_has_credentials = url.fragment().is_some_and(|fragment| {
         let contains_credentials = |parameters: &str| {
-            url::form_urlencoded::parse(parameters.as_bytes())
-                .any(|(name, value)| has_credential_parameter(url, &name, &value, depth))
+            parameters.contains('=')
+                && url::form_urlencoded::parse(parameters.as_bytes())
+                    .any(|(name, value)| has_credential_parameter(url, &name, &value, depth))
         };
         contains_credentials(fragment)
             || fragment
@@ -308,6 +309,15 @@ mod tests {
         let b = identify("https://example.com/foo?q=1#bottom").unwrap();
         assert_eq!(a.canonical_key, b.canonical_key);
         assert!(a.canonical_key.contains("?q=1"));
+    }
+
+    #[test]
+    fn plain_fragment_anchors_are_not_credentials() {
+        let plain = identify("https://example.com/docs").unwrap();
+        for anchor in ["code", "token", "signature", "auth"] {
+            let with_anchor = identify(&format!("https://example.com/docs#{anchor}")).unwrap();
+            assert_eq!(with_anchor.canonical_key, plain.canonical_key);
+        }
     }
 
     #[test]

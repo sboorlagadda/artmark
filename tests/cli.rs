@@ -129,6 +129,20 @@ fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
 }
 
 #[test]
+fn plain_credential_named_anchor_registers_as_an_alias() {
+    let dir = std::env::temp_dir().join(format!("artmark-anchor-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+    let (code, first) = run(&db, &["add", "https://example.com/docs"], None);
+    assert_eq!(code, 0);
+    let (code, second) = run(&db, &["add", "https://example.com/docs#code"], None);
+    assert_eq!(code, 0);
+    assert_eq!(second["id"], first["id"]);
+    assert_eq!(row_counts(&db), (1, 2, 1));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn cli_registry_and_fts_work_end_to_end() {
     let dir = std::env::temp_dir().join(format!("artmark-cli-{}", Uuid::now_v7()));
     fs::create_dir_all(&dir).unwrap();
