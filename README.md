@@ -1,5 +1,3 @@
-<img src="assets/logo.png" alt="artmark logo" width="72">
-
 # artmark
 
 **Early / v0.1:** artmark is usable, but the CLI, JSON output, and SQLite schema are not yet stable compatibility contracts.
