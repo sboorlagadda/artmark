@@ -126,7 +126,7 @@ Artmark is an artifact registry. The source system still owns the artifact.
 
 ## Use Artmark with an agent
 
-The repository includes an [Artmark skill](skills/artmark/SKILL.md) that teaches a Codex agent how to use the registry. Copy `skills/artmark` from this checkout or a release archive to `~/.codex/skills/artmark`; the skill checks for CLI updates on first use each session.
+The repository includes an [Artmark skill](skills/artmark/SKILL.md) that teaches a Codex agent how to use the registry. Copy `skills/artmark` from this checkout or a release archive to `~/.codex/skills/artmark`. The skill checks whether the CLI is available when first used in a session. Installing or upgrading the CLI is a separate setup step that you request explicitly.
 
 The agent workflow is:
 
