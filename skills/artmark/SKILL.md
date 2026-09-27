@@ -57,6 +57,8 @@ Keep the returned `art_...` ID for possible indexing.
 
 Do not register temporary or credential-bearing locators such as signed URLs, authentication callbacks, temporary download URLs, session URLs, or paths to obviously temporary files. Prefer a stable canonical locator without secrets when one is available.
 
+The CLI rejects URLs containing URL credentials, authentication query parameters, and signed download parameters. A rejected registration is not saved; use a stable locator if the user has one. Ordinary query parameters remain part of a generic web artifact's identity.
+
 Do not register ordinary artifacts discovered independently through web searches, provider searches, repository exploration, or other agent research. If a discovered artifact appears especially valuable for future work, ask the user before retaining it. Do not interrupt ordinary research to ask about every result.
 
 ## Decide when to index

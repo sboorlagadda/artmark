@@ -23,6 +23,7 @@ pub fn identify(input: &str) -> Result<Identity> {
         }
         Err(error) => return Err(error.into()),
     };
+    validate_locator(&url)?;
     if url.scheme() == "file" {
         let path = url
             .to_file_path()
@@ -143,6 +144,71 @@ pub fn identify(input: &str) -> Result<Identity> {
     })
 }
 
+// This check belongs at identity construction so every registration interface
+// (including a future MCP interface) uses the same boundary before persistence.
+fn validate_locator(url: &Url) -> Result<()> {
+    validate_locator_at_depth(url, 0)
+}
+
+fn validate_locator_at_depth(url: &Url, depth: usize) -> Result<()> {
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("artifact URL contains credentials");
+    }
+    let has_credentials = url.query_pairs().any(|(name, value)| {
+        is_credential_parameter(&name)
+            || Url::parse(&value).is_ok_and(|nested| {
+                depth >= 3 || validate_locator_at_depth(&nested, depth + 1).is_err()
+            })
+    });
+    let fragment_has_credentials = url.fragment().is_some_and(|fragment| {
+        let parameters = fragment.rsplit_once('?').map_or(fragment, |(_, tail)| tail);
+        url::form_urlencoded::parse(parameters.as_bytes())
+            .any(|(name, _)| is_credential_parameter(&name))
+    });
+    if has_credentials || fragment_has_credentials {
+        bail!("artifact URL contains credentials");
+    }
+    Ok(())
+}
+
+fn is_credential_parameter(name: &str) -> bool {
+    let normalized: String = name
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    normalized.starts_with("xamz")
+        || normalized.starts_with("xgoog")
+        || normalized.ends_with("token")
+        || matches!(
+            normalized.as_str(),
+            "key"
+                | "apikey"
+                | "accesskey"
+                | "accesskeyid"
+                | "awsaccesskeyid"
+                | "googleaccessid"
+                | "secret"
+                | "secretkey"
+                | "clientsecret"
+                | "password"
+                | "passwd"
+                | "pwd"
+                | "auth"
+                | "authkey"
+                | "authorization"
+                | "code"
+                | "credential"
+                | "signature"
+                | "sig"
+                | "oauthsignature"
+                | "jwt"
+                | "session"
+                | "sessionid"
+                | "samlresponse"
+        )
+}
+
 fn notion_id(segment: &str) -> Option<String> {
     let plain = segment.rsplit('-').next()?;
     let suffix = if plain.len() == 32 {
@@ -222,6 +288,29 @@ mod tests {
         let b = identify("https://example.com/foo?q=1#bottom").unwrap();
         assert_eq!(a.canonical_key, b.canonical_key);
         assert!(a.canonical_key.contains("?q=1"));
+    }
+
+    #[test]
+    fn credential_parameters_and_userinfo_are_rejected() {
+        for uri in [
+            "https://example.com/file?token=secret",
+            "https://example.com/file?access%5Ftoken=secret",
+            "https://example.com/file?API-Key=secret",
+            "https://example.com/file?X-Amz-Signature=secret&X-Amz-Expires=300",
+            "https://example.com/file?X-Goog-Credential=secret",
+            "https://example.com/file?GoogleAccessId=user&Signature=secret",
+            "https://example.com/file?sv=1&sig=secret",
+            "https://example.com/callback?code=secret&state=abc",
+            "https://example.com/redirect?next=https%3A%2F%2Fexample.org%2Ffile%3Ftoken%3Dsecret",
+            "https://example.com/file#access_token=secret",
+            "https://example.com/file#section?session_id=secret",
+            "https://user:secret@example.com/file",
+            "file:///tmp/report?token=secret",
+            "https://docs.google.com/document/d/ABC/edit?token=secret",
+        ] {
+            let error = identify(uri).unwrap_err().to_string();
+            assert!(!error.contains("secret"), "{error}");
+        }
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use rusqlite::Connection;
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
@@ -30,6 +31,85 @@ fn run(db: &Path, args: &[&str], input: Option<&str>) -> (i32, Value) {
         output.status.code().unwrap(),
         serde_json::from_str(&stdout).unwrap_or_else(|_| panic!("invalid JSON: {stdout}")),
     )
+}
+
+fn row_counts(db: &Path) -> (i64, i64, i64) {
+    let conn = Connection::open(db).unwrap();
+    let count = |table| {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    };
+    (count("artifacts"), count("aliases"), count("artifact_fts"))
+}
+
+#[test]
+fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
+    let dir = std::env::temp_dir().join(format!("artmark-credentials-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+    let secret = "secret-should-never-appear-in-error";
+    for uri in [
+        format!("https://example.com/file?token={secret}"),
+        format!("https://example.com/file?X-Amz-Signature={secret}"),
+        format!("https://example.com/file?sig={secret}"),
+        format!("https://user:{secret}@example.com/file"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+            .args(["--database", db.to_str().unwrap(), "add", &uri, "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(6));
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        assert_eq!(row_counts(&db), (0, 0, 0));
+    }
+
+    let (code, first) = run(&db, &["add", "https://example.com/item?id=1"], None);
+    assert_eq!(code, 0);
+    let (_, duplicate) = run(&db, &["add", "https://EXAMPLE.com/item?id=1#heading"], None);
+    assert_eq!(duplicate["id"], first["id"]);
+    let (_, distinct) = run(&db, &["add", "https://example.com/item?id=2"], None);
+    assert_ne!(distinct["id"], first["id"]);
+    assert_eq!(row_counts(&db), (2, 3, 2));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+        .args([
+            "--database",
+            db.to_str().unwrap(),
+            "add",
+            &format!("https://example.com/item?id=1&access_token={secret}"),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+    assert_eq!(row_counts(&db), (2, 3, 2));
+
+    let (code, _) = run(
+        &db,
+        &["add", "https://docs.google.com/document/d/ABC/edit"],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(row_counts(&db), (3, 4, 3));
+    let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+        .args([
+            "--database",
+            db.to_str().unwrap(),
+            "add",
+            &format!("https://docs.google.com/document/d/ABC/view?token={secret}"),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+    assert_eq!(row_counts(&db), (3, 4, 3));
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
