@@ -38,7 +38,7 @@ impl Registry {
         )?;
         let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version > 1 {
-            bail!("database schema version {version} is newer than this Artmark build");
+            bail!("database schema version {version} is newer than this artmark build");
         }
         if version == 0 {
             conn.execute_batch(

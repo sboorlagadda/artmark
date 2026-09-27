@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package and verify the four native Artmark release archives."""
+"""Package and verify the four native artmark release archives."""
 
 from __future__ import annotations
 
@@ -21,10 +21,17 @@ TARGETS = {
 }
 EXTRAS = (
     Path("README.md"),
+    Path("SECURITY.md"),
+    Path("CHANGELOG.md"),
+    Path("assets/logo.png"),
+    Path("assets/hero-image.png"),
+    Path("assets/social-image.png"),
+    Path("assets/social-preview.png"),
     Path("LICENSE"),
     Path("CONTRIBUTING.md"),
     Path("AGENTS.md"),
-    Path("spec.md"),
+    Path("docs/design.md"),
+    Path("docs/brand-kit.md"),
     Path("skills/artmark/SKILL.md"),
 )
 
@@ -100,7 +107,7 @@ def main() -> int:
         print(package(args.binary, args.target, version, args.dist))
     else:
         verify(args.dist, version)
-        print(f"Verified {len(TARGETS)} Artmark {version} release archives")
+        print(f"Verified {len(TARGETS)} artmark {version} release archives")
     return 0
 
 

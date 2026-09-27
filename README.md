@@ -1,6 +1,12 @@
-# Artmark
+<img src="assets/logo.png" alt="artmark logo" width="72">
+
+# artmark
+
+**Early / v0.1:** artmark is usable, but the CLI, JSON output, and SQLite schema are not yet stable compatibility contracts.
 
 **A local bookmark manager for your agents.**
+
+![artmark connects artifacts from one agent session to a local search card and a live source in a later session](assets/hero-image.png)
 
 Your agent sees useful artifacts all day: Google Docs, Figma designs, GitHub issues, PDFs, web pages, local files, and more.
 
@@ -8,7 +14,7 @@ The problem is that the **session is temporary, but the artifacts are not**.
 
 You may give an agent ten useful links while working on something, but weeks later a new session doesn't reliably know they existed. You end up searching old chats, finding the links again, and rebuilding the prompt.
 
-**Artmark makes them findable across agent sessions.**
+**artmark makes them findable across agent sessions.**
 
 It keeps a small, searchable local catalog of the artifacts you and your agents encounter, so later you can ask:
 
@@ -22,11 +28,11 @@ Find the GitHub issue about webhook retries.
 
 and your agent has somewhere durable to look.
 
-Think of Artmark as **bookmarks for agents** — a local Yellow Pages for your artifacts.
+Think of artmark as **bookmarks for agents** — a local Yellow Pages for your artifacts.
 
 ## How it works
 
-Artmark is the agent's local catalog. Your agent's existing harness and tools access Google Drive, Figma, GitHub, the web, or your filesystem. Artmark itself does not fetch from those systems.
+artmark is the agent's local catalog. Your agent's existing harness and tools access Google Drive, Figma, GitHub, the web, or your filesystem. artmark itself does not fetch from those systems.
 
 When you provide a durable artifact, the agent can register its pointer immediately. If you ask it to save the artifact, or it reads the artifact during its work, the agent uses its provider tool to inspect the source and creates a compact search card:
 
@@ -34,7 +40,7 @@ When you provide a durable artifact, the agent can register its pointer immediat
 You provide an artifact
         │
         ▼
-agent registers its pointer in Artmark
+agent registers its pointer in artmark
         │
         ▼
 agent resolves and reads the source
@@ -45,7 +51,7 @@ agent resolves and reads the source
 agent creates a compact search card
         │
         ▼
-Artmark indexes the card in local SQLite
+artmark indexes the card in local SQLite
 ```
 
 Later:
@@ -65,7 +71,7 @@ agent retrieves the current document
 through its Google Drive tool
 ```
 
-An uninspected artifact can stay registered as a pointer. A content-derived search card is indexed only after the agent has inspected the source with its available tools. Artmark stores the **pointer, search card, and retrieval hints**, never a copy of the source artifact.
+An uninspected artifact can stay registered as a pointer. A content-derived search card is indexed only after the agent has inspected the source with its available tools. artmark stores the **pointer, search card, and retrieval hints**, never a copy of the source artifact.
 
 The original Google Doc stays in Google Drive; the Figma file stays in Figma; the GitHub issue stays in GitHub.
 
@@ -122,31 +128,32 @@ This is where it lives.
 This is how to retrieve it again.
 ```
 
-Artmark is an artifact registry. The source system still owns the artifact.
+artmark is an artifact registry. The source system still owns the artifact.
 
-## Use Artmark with an agent
+## Use artmark with an agent
 
-The repository includes an [Artmark skill](skills/artmark/SKILL.md) that teaches a Codex agent how to use the registry. Copy `skills/artmark` from this checkout or a release archive to `~/.codex/skills/artmark`. The skill checks whether the CLI is available when first used in a session. Installing or upgrading the CLI is a separate setup step that you request explicitly.
+The repository includes an [artmark skill](skills/artmark/SKILL.md) that teaches a Codex agent how to use the registry. Copy `skills/artmark` from this checkout or a release archive to `~/.codex/skills/artmark`. The skill checks whether the CLI is available when first used in a session. Installing or upgrading the CLI is a separate setup step that you request explicitly.
 
 The agent workflow is:
 
 ```text
 1. Register pointers for durable artifacts you provide.
 2. When asked to save one, or when already reading it, resolve the source with an existing tool.
-3. Create a short search card from what it learned and index that card in Artmark.
-4. In a later session, search Artmark, then retrieve the current source through the provider tool.
+3. Create a short search card from what it learned and index that card in artmark.
+4. In a later session, search artmark, then retrieve the current source through the provider tool.
 ```
 
 The agent asks before registering artifacts it discovers independently through searches. See [AGENTS.md](AGENTS.md) for the full registration policy.
 
 ## Local by design
 
-Artmark is intentionally small.
+artmark is intentionally small.
 
 The catalog lives in:
 
 ```text
-~/.artmark/artmark.db
+$HOME/.artmark/artmark.db (macOS and Linux)
+%USERPROFILE%\.artmark\artmark.db (Windows)
 ```
 
 Search uses SQLite FTS5.
@@ -157,7 +164,7 @@ There is:
 no server
 no account
 no cloud database
-no provider credentials stored by Artmark
+no provider credentials stored by artmark
 no copy of your source documents
 no embeddings required
 ```
@@ -168,7 +175,7 @@ The agent's provider tools remain responsible for retrieving current source cont
 
 ## Install
 
-Download the latest prebuilt binary from [GitHub Releases](https://github.com/sboorlagadda/artmark/releases/latest).
+Download the latest prebuilt binary and its matching `.sha256` file from [GitHub Releases](https://github.com/sboorlagadda/artmark/releases/latest). These instructions use the `v0.1.0` filenames; substitute the filenames shown on the latest release if it is newer.
 
 Pick the archive for your machine:
 
@@ -179,38 +186,54 @@ Pick the archive for your machine:
 | macOS Apple Silicon | `aarch64-apple-darwin.tar.gz` |
 | Windows x86-64 | `x86_64-pc-windows-msvc.zip` |
 
-Each archive has a matching `.sha256` file.
-
-Verify the archive before extracting it. Then put `artmark` (or `artmark.exe`) on your `PATH` and run:
+From a terminal in the directory containing both downloaded files, use the commands for your system. On Linux x86-64:
 
 ```bash
+archive=artmark-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+sha256sum -c "$archive.sha256"
+mkdir -p "$HOME/.local/bin"
+tar -xzf "$archive" -C "$HOME/.local/bin" artmark
+export PATH="$HOME/.local/bin:$PATH"
 artmark --version
 ```
 
-On Linux:
+On macOS, choose **one** archive name: `artmark-v0.1.0-aarch64-apple-darwin.tar.gz` for Apple Silicon or `artmark-v0.1.0-x86_64-apple-darwin.tar.gz` for Intel. Then run:
 
 ```bash
-sha256sum -c ARCHIVE.sha256
+archive=artmark-v0.1.0-aarch64-apple-darwin.tar.gz  # change to Intel filename if needed
+shasum -a 256 -c "$archive.sha256"
+mkdir -p "$HOME/.local/bin"
+tar -xzf "$archive" -C "$HOME/.local/bin" artmark
+export PATH="$HOME/.local/bin:$PATH"
+artmark --version
 ```
 
-On macOS:
+Add `$HOME/.local/bin` to your shell's `PATH` configuration if you want `artmark` available in future terminal sessions.
 
-```bash
-shasum -a 256 -c ARCHIVE.sha256
-```
+**macOS Gatekeeper:** The release binaries are currently **unsigned and not notarized**. macOS may block the first run with “Apple cannot check it for malicious software” or an unidentified-developer warning. After verifying the release checksum and attempting to run `artmark --version`, open **System Settings → Privacy & Security**, select **Open Anyway** for `artmark`, and confirm **Open**. If macOS reports that the binary is damaged or will harm your computer, do not override that warning; download a fresh archive and verify its checksum again. See [Apple's Gatekeeper instructions](https://support.apple.com/en-us/102445).
 
-On Windows, compare:
+On Windows x86-64, in PowerShell from the directory containing the downloads:
 
 ```powershell
-(Get-FileHash ARCHIVE -Algorithm SHA256).Hash
+$archive = 'artmark-v0.1.0-x86_64-pc-windows-msvc.zip'
+$expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
+$actual = (Get-FileHash $archive -Algorithm SHA256).Hash
+if ($actual -ne $expected) { throw 'Checksum mismatch' }
+$bin = Join-Path $HOME '.local\bin'
+New-Item -ItemType Directory -Force $bin | Out-Null
+Expand-Archive $archive -DestinationPath $bin -Force
+$env:PATH = "$bin;$env:PATH"
+artmark --version
 ```
 
-with the digest in the checksum file.
+Add `%USERPROFILE%\.local\bin` to your user `PATH` to use `artmark` in future terminals.
 
 Rust users can also build from source:
 
 ```bash
-cargo install --path .
+git clone https://github.com/sboorlagadda/artmark.git
+cd artmark
+cargo install --locked --path .
 ```
 
 ## Try it
@@ -224,7 +247,7 @@ artmark add \
   --json
 ```
 
-Artmark returns an `art_...` ID.
+artmark returns an `art_...` ID.
 
 After inspecting the source, save the example search card above as `card.json` and index it:
 
@@ -246,7 +269,7 @@ artmark get art_... --json
 
 `search` returns compact artifact cards.
 
-`get` returns Artmark's catalog metadata and retrieval hints.
+`get` returns artmark's catalog metadata and retrieval hints.
 
 Neither command fetches the source artifact.
 
@@ -260,9 +283,9 @@ reindex
 forget
 ```
 
-`reindex` rebuilds the local FTS5 index from Artmark's catalog.
+`reindex` rebuilds the local FTS5 index from artmark's catalog.
 
-`forget` removes the Artmark entry. It never deletes or modifies the underlying artifact.
+`forget` removes the artmark entry. It never deletes or modifies the underlying artifact.
 
 Run:
 
@@ -274,10 +297,11 @@ for all commands, options, and filters.
 
 ## Data and privacy
 
-Artmark's default database is:
+artmark's default database is:
 
 ```text
-~/.artmark/artmark.db
+$HOME/.artmark/artmark.db (macOS and Linux)
+%USERPROFILE%\.artmark\artmark.db (Windows)
 ```
 
 Use:
@@ -294,13 +318,15 @@ ARTMARK_DB
 
 to choose another database.
 
-On Unix, Artmark creates the directory with `0700` permissions and the database with `0600` permissions.
+On Unix, artmark creates the directory with `0700` permissions and the database with `0600` permissions.
 
-Artmark does not store provider credentials.
+artmark does not store provider credentials.
 
 It does not need Google, Figma, GitHub, or other provider authentication. Those responsibilities remain with the agent harness or tools that already have access.
 
 Back up a stopped database or use SQLite's backup mechanism for a consistent copy.
+
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting and [docs/design.md](docs/design.md) for the registry design.
 
 ## Agent-friendly CLI behavior
 
@@ -327,7 +353,7 @@ Search scores are local ranking scores, not probabilities.
 
 ## Status
 
-Artmark is early.
+artmark is an early `v0.1` release. CLI behavior, JSON fields, and the local database schema may change before `1.0`.
 
 The CLI and local FTS5 catalog are available now.
 
@@ -341,12 +367,14 @@ additional agent integrations
 
 The core architecture will remain the same:
 
-> **Artmark remembers enough to find the artifact. The source system still owns the artifact.**
+> **artmark remembers enough to find the artifact. The source system still owns the artifact.**
 
 ## Contributing
 
 Development setup, PR checks, and release versioning are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+The [brand kit](docs/brand-kit.md) contains the logo and graphics for launch posts.
+
 Issues, ideas, and pull requests are welcome.
 
-Artmark is licensed under [Apache-2.0](LICENSE).
+artmark is licensed under [Apache-2.0](LICENSE).

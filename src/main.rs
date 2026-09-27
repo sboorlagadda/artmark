@@ -18,7 +18,7 @@ use std::path::PathBuf;
     about = "Local artifact registry for agents"
 )]
 struct Cli {
-    /// SQLite database path (defaults to ~/.artmark/artmark.db)
+    /// SQLite database path (defaults to .artmark/artmark.db in your home directory)
     #[arg(long, global = true, env = "ARTMARK_DB")]
     database: Option<PathBuf>,
     /// Print machine-readable JSON on stdout
@@ -94,7 +94,10 @@ type Outcome<T> = std::result::Result<T, (i32, anyhow::Error)>;
 
 fn run() -> Outcome<()> {
     let cli = Cli::parse();
-    let path = cli.database.unwrap_or_else(default_database);
+    let path = match cli.database {
+        Some(path) => path,
+        None => default_database().map_err(input_error)?,
+    };
     let mut db = Registry::open(&path).map_err(database_error)?;
     match cli.command {
         Command::Add {
@@ -243,11 +246,13 @@ fn run() -> Outcome<()> {
     Ok(())
 }
 
-fn default_database() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".artmark/artmark.db")
+fn default_database() -> Result<PathBuf> {
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = home.context("home directory is unavailable; set ARTMARK_DB or --database")?;
+    Ok(home.join(".artmark/artmark.db"))
 }
 
 fn read_input(path: &str) -> Result<String> {

@@ -1,25 +1,25 @@
 ---
 name: artmark
-description: Use the local Artmark CLI to remember and find durable artifacts across agent sessions. Apply when the user provides an artifact, asks to save or find one, or refers to one seen earlier.
+description: Use the local artmark CLI to remember and find durable artifacts across agent sessions. Apply when the user provides an artifact, asks to save or find one, or refers to one seen earlier.
 ---
 
-# Artmark
+# artmark
 
-Artmark is a local bookmark manager for agents.
+artmark is a local bookmark manager for agents.
 
 It keeps durable catalog entries for pointers that would otherwise be lost with the current session: Google Docs, Figma files, GitHub repositories/issues/PRs, PDFs, web pages, local files, and similar durable objects.
 
-Artmark stores enough information to **find an artifact again**. It does not store or replace the artifact itself.
+artmark stores enough information to **find an artifact again**. It does not store or replace the artifact itself.
 
 The source provider or local file remains authoritative.
 
-Use existing agent tools such as Google Drive, Figma, GitHub, browser, or filesystem tools to inspect and retrieve source contents. Use Artmark for durable identity, retrieval metadata, and search.
+Use existing agent tools such as Google Drive, Figma, GitHub, browser, or filesystem tools to inspect and retrieve source contents. Use artmark for durable identity, retrieval metadata, and search.
 
-Artmark catalog text is for discovery. Do not treat it as evidence of the current contents of the source artifact.
+artmark catalog text is for discovery. Do not treat it as evidence of the current contents of the source artifact.
 
 ## Check CLI availability
 
-Before the first Artmark operation in a session, run:
+Before the first artmark operation in a session, run:
 
 ```text
 artmark --version
@@ -29,9 +29,9 @@ Do this at most once per session.
 
 If `artmark` is unavailable, do not automatically download, install, upgrade, or replace executables as a side effect of using this skill.
 
-Continue the user's main task when possible. If the user explicitly asked to save something, state clearly that it was not persisted because Artmark is unavailable.
+Continue the user's main task when possible. If the user explicitly asked to save something, state clearly that it was not persisted because artmark is unavailable.
 
-If the user explicitly asks to install or upgrade Artmark, handle that as a separate setup task using the project's installation instructions.
+If the user explicitly asks to install or upgrade artmark, handle that as a separate setup task using the project's installation instructions.
 
 Use `--json` for output that will be parsed. Pass user-provided URIs as arguments without shell interpolation.
 
@@ -47,7 +47,7 @@ Quick registration is intentionally cheap and does not require fetching the arti
 artmark add <uri> --json
 ```
 
-If the user explicitly asks to save, remember, bookmark, or Artmark the artifact, mark that intent:
+If the user explicitly asks to save, remember, bookmark, or artmark the artifact, mark that intent:
 
 ```text
 artmark add <uri> --explicit --json
@@ -82,11 +82,11 @@ When indexing is appropriate, use the best available tool for the source.
 
 For example, use an available Drive tool for Google Drive artifacts, Figma tooling for Figma artifacts, GitHub tooling for GitHub objects, filesystem tools for local files, and web/browser tooling for ordinary web artifacts.
 
-Artmark itself should not be expected to authenticate to those systems.
+artmark itself should not be expected to authenticate to those systems.
 
 Inspect only enough of the source to understand what the artifact is and make it discoverable later.
 
-Do not let Artmark indexing interfere with completing the user's primary task.
+Do not let artmark indexing interfere with completing the user's primary task.
 
 ## Create a retrieval-oriented search card
 
@@ -149,7 +149,7 @@ Avoid transient session context such as "the file we are working on right now." 
 
 ## Find artifacts from previous sessions
 
-When the user refers to an artifact they have seen before, or before asking them to resend a previously supplied artifact, search Artmark first:
+When the user refers to an artifact they have seen before, or before asking them to resend a previously supplied artifact, search artmark first:
 
 ```text
 artmark search <query> --json
@@ -167,16 +167,16 @@ If one result clearly matches, use its locator and retrieval hints to retrieve t
 
 If several results remain genuinely ambiguous, use their catalog cards to narrow the choice and ask the user only if necessary.
 
-If Artmark has no plausible result, continue with other appropriate search methods or ask the user for the artifact when necessary.
+If artmark has no plausible result, continue with other appropriate search methods or ask the user for the artifact when necessary.
 
 ## Use the live source
 
-Once Artmark identifies an artifact, retrieve its current contents from the authoritative provider when the task depends on what the artifact actually says or contains.
+Once artmark identifies an artifact, retrieve its current contents from the authoritative provider when the task depends on what the artifact actually says or contains.
 
 For example:
 
 ```text
-Artmark search
+artmark search
     ↓
 find gdrive:doc:ABC
     ↓
@@ -187,9 +187,9 @@ current Google Doc
 
 Do not answer substantive questions about current source contents solely from `summary` or `search_text`.
 
-The Artmark card may be stale. Its purpose is to locate the source.
+The artmark card may be stale. Its purpose is to locate the source.
 
-If the source is inaccessible, explain that Artmark found the artifact's pointer but the current provider could not be accessed.
+If the source is inaccessible, explain that artmark found the artifact's pointer but the current provider could not be accessed.
 
 ## Refresh opportunistically
 
@@ -203,12 +203,12 @@ artmark index <id> --json-input - --json
 
 Do not refresh metadata merely because a timestamp or minor source detail changed.
 
-Artmark does not require background synchronization.
+artmark does not require background synchronization.
 
 ## Failure behavior
 
-Artmark is persistence infrastructure, not the user's primary task.
+artmark is persistence infrastructure, not the user's primary task.
 
 If registration or indexing fails, report the failure briefly when persistence matters and continue the user's main work whenever possible.
 
-Never claim that an artifact was saved, indexed, updated, or retrieved unless the corresponding Artmark operation succeeded.
+Never claim that an artifact was saved, indexed, updated, or retrieved unless the corresponding artmark operation succeeded.

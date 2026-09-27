@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Artmark's one-version-bump-per-PR release policy."""
+"""Validate artmark's one-version-bump-per-PR release policy."""
 
 from __future__ import annotations
 
