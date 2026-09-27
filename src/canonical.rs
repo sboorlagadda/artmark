@@ -154,21 +154,41 @@ fn validate_locator_at_depth(url: &Url, depth: usize) -> Result<()> {
     if !url.username().is_empty() || url.password().is_some() {
         bail!("artifact URL contains credentials");
     }
-    let has_credentials = url.query_pairs().any(|(name, value)| {
-        is_credential_parameter(&name)
-            || Url::parse(&value).is_ok_and(|nested| {
-                depth >= 3 || validate_locator_at_depth(&nested, depth + 1).is_err()
-            })
-    });
+    let has_credentials = url
+        .query_pairs()
+        .any(|(name, value)| has_credential_parameter(url, &name, &value, depth));
     let fragment_has_credentials = url.fragment().is_some_and(|fragment| {
-        let parameters = fragment.rsplit_once('?').map_or(fragment, |(_, tail)| tail);
-        url::form_urlencoded::parse(parameters.as_bytes())
-            .any(|(name, _)| is_credential_parameter(&name))
+        let contains_credentials = |parameters: &str| {
+            url::form_urlencoded::parse(parameters.as_bytes())
+                .any(|(name, value)| has_credential_parameter(url, &name, &value, depth))
+        };
+        contains_credentials(fragment)
+            || fragment
+                .rsplit_once('?')
+                .is_some_and(|(_, tail)| contains_credentials(tail))
     });
     if has_credentials || fragment_has_credentials {
         bail!("artifact URL contains credentials");
     }
     Ok(())
+}
+
+fn has_credential_parameter(url: &Url, name: &str, value: &str, depth: usize) -> bool {
+    if is_credential_parameter(name) {
+        return true;
+    }
+    // Join only locator-shaped values. Joining an empty value would reproduce
+    // the containing URL and incorrectly reject a harmless empty parameter.
+    let looks_like_locator = value.starts_with('/')
+        || value.starts_with('?')
+        || value.starts_with("./")
+        || value.starts_with("../")
+        || value.contains("://")
+        || value.contains('?');
+    looks_like_locator
+        && url.join(value).is_ok_and(|nested| {
+            depth >= 3 || validate_locator_at_depth(&nested, depth + 1).is_err()
+        })
 }
 
 fn is_credential_parameter(name: &str) -> bool {
@@ -302,8 +322,14 @@ mod tests {
             "https://example.com/file?sv=1&sig=secret",
             "https://example.com/callback?code=secret&state=abc",
             "https://example.com/redirect?next=https%3A%2F%2Fexample.org%2Ffile%3Ftoken%3Dsecret",
+            "https://example.com/redirect?next=%2Fdownload%3Ftoken%3Dsecret",
+            "https://example.com/redirect?next=%2F%2Fexample.org%2Ffile%3Fsig%3Dsecret",
+            "https://example.com/redirect?next=download%3Ftoken%3Dsecret",
             "https://example.com/file#access_token=secret",
             "https://example.com/file#section?session_id=secret",
+            "https://example.com/file#next=https%3A%2F%2Fexample.org%2Ffile%3Ftoken%3Dsecret",
+            "https://example.com/file#next=%2Fdownload%3Ftoken%3Dsecret",
+            "https://example.com/file#next=https://user:secret@example.org/file?view=1",
             "https://user:secret@example.com/file",
             "file:///tmp/report?token=secret",
             "https://docs.google.com/document/d/ABC/edit?token=secret",

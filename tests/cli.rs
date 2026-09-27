@@ -55,6 +55,10 @@ fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
         format!("https://example.com/file?X-Amz-Signature={secret}"),
         format!("https://example.com/file?sig={secret}"),
         format!("https://user:{secret}@example.com/file"),
+        format!("https://example.com/file?next=%2Fdownload%3Ftoken%3D{secret}"),
+        format!(
+            "https://example.com/file#next=https%3A%2F%2Fexample.org%2Ffile%3Ftoken%3D{secret}"
+        ),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
             .args(["--database", db.to_str().unwrap(), "add", &uri, "--json"])
@@ -74,6 +78,18 @@ fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
     assert_ne!(distinct["id"], first["id"]);
     assert_eq!(row_counts(&db), (2, 3, 2));
 
+    let (code, nested) = run(
+        &db,
+        &[
+            "add",
+            "https://example.com/item?next=%2Fpage%3Fid%3D3&empty=",
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_ne!(nested["id"], first["id"]);
+    assert_eq!(row_counts(&db), (3, 4, 3));
+
     let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
         .args([
             "--database",
@@ -87,7 +103,7 @@ fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
     assert_eq!(output.status.code(), Some(6));
     assert!(output.stdout.is_empty());
     assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
-    assert_eq!(row_counts(&db), (2, 3, 2));
+    assert_eq!(row_counts(&db), (3, 4, 3));
 
     let (code, _) = run(
         &db,
@@ -95,7 +111,7 @@ fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
         None,
     );
     assert_eq!(code, 0);
-    assert_eq!(row_counts(&db), (3, 4, 3));
+    assert_eq!(row_counts(&db), (4, 5, 4));
     let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
         .args([
             "--database",
@@ -108,7 +124,7 @@ fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
         .unwrap();
     assert_eq!(output.status.code(), Some(6));
     assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
-    assert_eq!(row_counts(&db), (3, 4, 3));
+    assert_eq!(row_counts(&db), (4, 5, 4));
     fs::remove_dir_all(dir).unwrap();
 }
 
