@@ -161,7 +161,9 @@ impl Inspector {
 
 fn oauth_path(path: &str) -> bool {
     // Exclude the authority: a hostname named "auth" is not an auth endpoint.
-    let path = if let Some((_, rest)) = path.split_once("//") {
+    let path = if let Some((_, rest)) = path.split_once("://") {
+        rest.find('/').map_or("", |offset| &rest[offset..])
+    } else if let Some(rest) = path.strip_prefix("//") {
         rest.find('/').map_or("", |offset| &rest[offset..])
     } else {
         path
