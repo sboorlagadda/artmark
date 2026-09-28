@@ -34,6 +34,7 @@ EXTRAS = (
     Path("CONTRIBUTING.md"),
     Path("AGENTS.md"),
     Path("docs/design.md"),
+    Path("docs/credential-validation.md"),
     Path("docs/brand-kit.md"),
     Path("skills/artmark/SKILL.md"),
 )

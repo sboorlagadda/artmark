@@ -583,6 +583,113 @@ fn lexical_query(query: &str) -> String {
 mod tests {
     use super::*;
 
+    fn snapshot(db: &Registry) -> Vec<Vec<Vec<rusqlite::types::Value>>> {
+        [
+            "artifacts",
+            "aliases",
+            "artifact_fts",
+            "topics",
+            "entities",
+            "tags",
+        ]
+        .into_iter()
+        .map(|table| {
+            let mut statement = db
+                .conn
+                .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                .unwrap();
+            let columns = statement.column_count();
+            statement
+                .query_map([], |row| {
+                    (0..columns).map(|column| row.get(column)).collect()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        })
+        .collect()
+    }
+
+    #[test]
+    fn rejected_registrations_leave_empty_and_populated_databases_unchanged() {
+        let path = test_path();
+        let mut db = Registry::open(&path).unwrap();
+        let rejected = crate::credential_cases::rejected();
+        for populated in [false, true] {
+            if populated {
+                let item = db
+                    .add("https://docs.google.com/document/d/ABC/view", None, false)
+                    .unwrap();
+                db.index(
+                    &item.id,
+                    catalog("Existing title", "Searchable SCIM migration"),
+                )
+                .unwrap();
+                // A rejected alias must not change title, explicit-save state,
+                // timestamps, metadata, related tables, or existing FTS rows.
+                db.conn.execute("UPDATE artifacts SET title=NULL, updated_at='before', last_seen_at='before'", []).unwrap();
+            }
+            let before = snapshot(&db);
+            let changes = db.conn.total_changes();
+            for uri in &rejected {
+                let error = db.add(uri, Some("Must not be stored"), true).unwrap_err();
+                assert!(!error.to_string().contains("TEST_SECRET"));
+                assert_eq!(db.conn.total_changes(), changes, "{uri}");
+                assert_eq!(snapshot(&db), before, "{uri}");
+            }
+            drop(db);
+            db = Registry::open(&path).unwrap();
+            assert_eq!(snapshot(&db), before);
+        }
+        drop(db);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ordinary_locators_persist_and_query_identity_survives_reopen() {
+        let path = test_path();
+        let mut db = Registry::open(&path).unwrap();
+        for uri in crate::credential_cases::accepted() {
+            db.add(&uri, None, false).expect(&uri);
+        }
+        let first = db
+            .add(
+                "https://example.com/products?code=ABC&state=CA",
+                None,
+                false,
+            )
+            .unwrap();
+        let duplicate = db
+            .add(
+                "https://EXAMPLE.com/products?code=ABC&state=CA#details",
+                None,
+                false,
+            )
+            .unwrap();
+        let other = db
+            .add(
+                "https://example.com/products?code=XYZ&state=CA",
+                None,
+                false,
+            )
+            .unwrap();
+        assert_eq!(first.id, duplicate.id);
+        assert_ne!(first.id, other.id);
+        let before = snapshot(&db);
+        drop(db);
+        let db = Registry::open(&path).unwrap();
+        assert_eq!(snapshot(&db), before);
+        assert_eq!(
+            db.get("https://example.com/products?code=ABC&state=CA")
+                .unwrap()
+                .unwrap()
+                .id,
+            first.id
+        );
+        drop(db);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     fn test_path() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("artmark-test-{}", Uuid::now_v7()));
         fs::create_dir_all(&dir).unwrap();

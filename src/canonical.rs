@@ -12,27 +12,21 @@ pub struct Identity {
 }
 
 pub fn identify(input: &str) -> Result<Identity> {
+    crate::credentials::validate(input)?;
     let input = input.trim();
     if input.is_empty() {
         bail!("artifact URI cannot be empty");
     }
     if input.starts_with("//") {
-        let network = Url::parse(&format!("https:{input}"))
-            .map_err(|_| anyhow::anyhow!("invalid scheme-relative locator"))?;
-        validate_locator(&network)?;
         return local_path(Path::new(input), input);
     }
     let mut url = match Url::parse(input) {
         Ok(url) => url,
         Err(url::ParseError::RelativeUrlWithoutBase) => {
-            if has_nested_url_in_text(input, 0) {
-                bail!("artifact URI contains credentials");
-            }
             return local_path(Path::new(input), input);
         }
         Err(error) => return Err(error.into()),
     };
-    validate_locator(&url)?;
     if url.scheme() == "file" {
         let path = url
             .to_file_path()
@@ -153,201 +147,6 @@ pub fn identify(input: &str) -> Result<Identity> {
     })
 }
 
-// This check belongs at identity construction so every registration interface
-// (including a future MCP interface) uses the same boundary before persistence.
-fn validate_locator(url: &Url) -> Result<()> {
-    validate_locator_at_depth(url, 0)
-}
-
-fn validate_locator_at_depth(url: &Url, depth: usize) -> Result<()> {
-    if !url.username().is_empty() || url.password().is_some() {
-        bail!("artifact URL contains credentials");
-    }
-    let oauth_context = is_oauth_context(url);
-    let has_credentials = url
-        .query_pairs()
-        .any(|(name, value)| has_credential_parameter(url, &name, &value, depth, oauth_context));
-    let fragment_has_credentials = url.fragment().is_some_and(|fragment| {
-        let contains_credentials = |parameters: &str| {
-            parameters.contains('=')
-                && url::form_urlencoded::parse(parameters.as_bytes()).any(|(name, value)| {
-                    has_credential_parameter(url, &name, &value, depth, oauth_context)
-                })
-        };
-        has_nested_locator(url, fragment, depth)
-            || contains_credentials(fragment)
-            || fragment
-                .rsplit_once('?')
-                .is_some_and(|(_, tail)| contains_credentials(tail))
-    });
-    if has_credentials || fragment_has_credentials || has_nested_url_in_text(url.path(), depth) {
-        bail!("artifact URL contains credentials");
-    }
-    Ok(())
-}
-
-fn has_nested_url_in_text(text: &str, depth: usize) -> bool {
-    let mut path = text.to_owned();
-    for _ in 0..=8 {
-        let lower = path.to_ascii_lowercase();
-        for (index, _) in path.char_indices() {
-            let tail = &path[index..];
-            let lower_tail = &lower[index..];
-            let nested = if lower_tail.starts_with("https://") || lower_tail.starts_with("http://")
-            {
-                Url::parse(tail).ok()
-            } else if tail.starts_with("//") {
-                Url::parse(&format!("https:{tail}")).ok()
-            } else {
-                None
-            };
-            if nested.is_some_and(|nested| {
-                depth >= 3 || validate_locator_at_depth(&nested, depth + 1).is_err()
-            }) {
-                return true;
-            }
-        }
-        let decoded = percent_decode_once(&path);
-        if decoded == path {
-            return false;
-        }
-        path = decoded;
-    }
-    true
-}
-
-fn is_oauth_context(url: &Url) -> bool {
-    let has_state = url
-        .query_pairs()
-        .any(|(name, _)| name.eq_ignore_ascii_case("state"))
-        || url.fragment().is_some_and(|fragment| {
-            let contains_state = |parameters: &str| {
-                url::form_urlencoded::parse(parameters.as_bytes())
-                    .any(|(name, _)| name.eq_ignore_ascii_case("state"))
-            };
-            contains_state(fragment)
-                || fragment
-                    .rsplit_once('?')
-                    .is_some_and(|(_, tail)| contains_state(tail))
-        });
-    has_state
-        || url.path_segments().is_some_and(|mut segments| {
-            segments.any(|segment| {
-                [
-                    "oauth",
-                    "authorize",
-                    "callback",
-                    "cb",
-                    "login",
-                    "signin",
-                    "auth",
-                    "sso",
-                ]
-                .iter()
-                .any(|part| segment.eq_ignore_ascii_case(part))
-            })
-        })
-}
-
-fn has_credential_parameter(
-    url: &Url,
-    name: &str,
-    value: &str,
-    depth: usize,
-    oauth_context: bool,
-) -> bool {
-    is_credential_parameter(name)
-        || (oauth_context && name.eq_ignore_ascii_case("code"))
-        || has_nested_locator(url, value, depth)
-}
-
-fn has_nested_locator(url: &Url, value: &str, depth: usize) -> bool {
-    let mut candidate = value.to_owned();
-    for _ in 0..=8 {
-        // Join only locator-shaped values. Joining an empty value would reproduce
-        // the containing URL and incorrectly reject a harmless empty parameter.
-        let looks_like_locator = candidate.starts_with('/')
-            || candidate.starts_with('?')
-            || candidate.starts_with("./")
-            || candidate.starts_with("../")
-            || candidate.contains("://")
-            || candidate.contains('?');
-        if looks_like_locator
-            && url.join(&candidate).is_ok_and(|nested| {
-                depth >= 3 || validate_locator_at_depth(&nested, depth + 1).is_err()
-            })
-        {
-            return true;
-        }
-        let decoded = percent_decode_once(&candidate);
-        if decoded == candidate {
-            return false;
-        }
-        candidate = decoded;
-    }
-    // Excessive encoding makes the locator ambiguous; do not persist it.
-    true
-}
-
-fn percent_decode_once(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%'
-            && index + 2 < bytes.len()
-            && let (Some(high), Some(low)) = (
-                (bytes[index + 1] as char).to_digit(16),
-                (bytes[index + 2] as char).to_digit(16),
-            )
-        {
-            decoded.push((high * 16 + low) as u8);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
-}
-
-fn is_credential_parameter(name: &str) -> bool {
-    let normalized: String = name
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .map(|ch| ch.to_ascii_lowercase())
-        .collect();
-    normalized.starts_with("xamz")
-        || normalized.starts_with("xgoog")
-        || normalized.ends_with("token")
-        || matches!(
-            normalized.as_str(),
-            "key"
-                | "apikey"
-                | "accesskey"
-                | "accesskeyid"
-                | "awsaccesskeyid"
-                | "googleaccessid"
-                | "secret"
-                | "secretkey"
-                | "clientsecret"
-                | "password"
-                | "passwd"
-                | "pwd"
-                | "auth"
-                | "authkey"
-                | "authorization"
-                | "credential"
-                | "signature"
-                | "sig"
-                | "oauthsignature"
-                | "jwt"
-                | "session"
-                | "sessionid"
-                | "samlresponse"
-        )
-}
-
 fn notion_id(segment: &str) -> Option<String> {
     let plain = segment.rsplit('-').next()?;
     let suffix = if plain.len() == 32 {
@@ -454,7 +253,7 @@ mod tests {
         assert_eq!(first.canonical_key, same.canonical_key);
         assert_ne!(first.canonical_key, second.canonical_key);
         assert!(identify("https://example.com/callback?code=secret").is_err());
-        assert!(identify("https://example.com/file?code=secret#section?state=abc").is_err());
+        assert!(identify("https://example.com/products?code=ABC&state=CA").is_ok());
     }
 
     #[test]

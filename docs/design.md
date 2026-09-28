@@ -30,3 +30,7 @@ Keeping source copies would turn artmark into a synchronization service with sta
 The agent already has provider-specific tools and the user's authorization to use them. It can inspect a source when building a card and retrieve the current version when answering a later question. artmark itself never authenticates to providers, stores provider credentials, or fetches source documents. This keeps the registry useful across providers without embedding every provider's API and permission model in the CLI.
 
 The current implementation is a Rust CLI over local SQLite. An MCP interface is planned after the CLI path is proven end to end; it will expose the same registry boundary rather than becoming a provider client.
+
+Registration checks locators for recognizable credentials before saving them.
+The [credential validation policy](credential-validation.md) defines supported
+forms, conservative rejection rules, processing limits, and acceptance tests.
