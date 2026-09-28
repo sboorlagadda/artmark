@@ -340,10 +340,15 @@ fn init_context() -> Result<serde_json::Value> {
             );
         }
         let after_end = end + CONTEXT_END.len();
+        let suffix = &original[after_end..];
+        let section = section.strip_suffix(newline).unwrap_or(&section);
         let mut next = String::with_capacity(original.len() + section.len());
         next.push_str(&original[..start]);
-        next.push_str(&section);
-        next.push_str(&original[after_end..]);
+        next.push_str(section);
+        if suffix.is_empty() {
+            next.push_str(newline);
+        }
+        next.push_str(suffix);
         next
     } else {
         anyhow::bail!(

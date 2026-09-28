@@ -265,3 +265,116 @@ fn default_database_uses_platform_home() {
     assert!(home.join(".artmark/artmark.db").is_file());
     fs::remove_dir_all(home).unwrap();
 }
+
+fn run_context_init(directory: &Path) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_artmark"));
+    command
+        .args(["context", "init", "--json"])
+        .current_dir(directory)
+        .env_remove("ARTMARK_DB");
+    #[cfg(windows)]
+    command.env("USERPROFILE", directory);
+    #[cfg(not(windows))]
+    command.env("HOME", directory);
+    command.output().unwrap()
+}
+
+#[test]
+fn context_init_creates_and_updates_idempotently_and_rejects_bad_markers() {
+    let dir = std::env::temp_dir().join(format!("artmark-context-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+
+    let fresh_dir = dir.join("fresh-project");
+    fs::create_dir(&fresh_dir).unwrap();
+    let fresh_first = run_context_init(&fresh_dir);
+    assert!(
+        fresh_first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fresh_first.stderr)
+    );
+    let fresh_first_result: Value = serde_json::from_slice(&fresh_first.stdout).unwrap();
+    assert_eq!(fresh_first_result["action"], "created");
+    let fresh_agents = fs::read_to_string(fresh_dir.join("AGENTS.md")).unwrap();
+    let fresh_second = run_context_init(&fresh_dir);
+    assert!(
+        fresh_second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fresh_second.stderr)
+    );
+    let fresh_second_result: Value = serde_json::from_slice(&fresh_second.stdout).unwrap();
+    assert_eq!(fresh_second_result["action"], "unchanged");
+    assert_eq!(
+        fs::read_to_string(fresh_dir.join("AGENTS.md")).unwrap(),
+        fresh_agents
+    );
+    assert!(!fresh_dir.join(".artmark/artmark.db").exists());
+
+    let agents = dir.join("AGENTS.md");
+    let prefix = "# Project\r\n\r\nKeep this before the generated section.\r\n\r\n";
+    let old_section = "<!-- artmark:context:start -->\r\nOld artmark instructions.\r\n<!-- artmark:context:end -->";
+    let suffix = "\r\n\r\nKeep this after the generated section.\r\n";
+    fs::write(&agents, format!("{prefix}{old_section}{suffix}")).unwrap();
+
+    let first = run_context_init(&dir);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_result: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first_result["action"], "updated");
+    let generated = fs::read_to_string(&agents).unwrap();
+    assert!(generated.starts_with(prefix));
+    assert!(generated.ends_with(suffix));
+    assert!(generated.contains("## Using artmark"));
+    assert!(
+        !generated.replace("\r\n", "").contains('\n'),
+        "context init should preserve CRLF throughout the file"
+    );
+
+    let second = run_context_init(&dir);
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_result: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second_result["action"], "unchanged");
+    assert_eq!(fs::read_to_string(&agents).unwrap(), generated);
+    assert!(!dir.join(".artmark/artmark.db").exists());
+
+    let malformed_cases = [
+        (
+            "incomplete",
+            "# Project\n<!-- artmark:context:start -->\nIncomplete section\n",
+        ),
+        (
+            "duplicated",
+            "<!-- artmark:context:start -->\nfirst\n<!-- artmark:context:end -->\n<!-- artmark:context:start -->\nsecond\n<!-- artmark:context:end -->\n",
+        ),
+        (
+            "malformed",
+            "# Project <!-- artmark:context:start -->\nOld section\n<!-- artmark:context:end -->\n",
+        ),
+        (
+            "reversed",
+            "<!-- artmark:context:end -->\nOld section\n<!-- artmark:context:start -->\n",
+        ),
+    ];
+    for (name, contents) in malformed_cases {
+        let case_dir = dir.join(name);
+        fs::create_dir(&case_dir).unwrap();
+        let case_agents = case_dir.join("AGENTS.md");
+        fs::write(&case_agents, contents).unwrap();
+        let output = run_context_init(&case_dir);
+        assert_eq!(output.status.code(), Some(6), "case: {name}");
+        assert!(output.stdout.is_empty(), "case: {name}");
+        assert_eq!(
+            fs::read_to_string(&case_agents).unwrap(),
+            contents,
+            "case: {name}"
+        );
+    }
+
+    fs::remove_dir_all(dir).unwrap();
+}
