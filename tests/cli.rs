@@ -442,7 +442,8 @@ fn context_init_creates_and_updates_idempotently_and_rejects_bad_markers() {
     fs::remove_dir_all(dir).unwrap();
 }
 
-#[cfg(unix)]
+// macOS rejects non-UTF-8 filenames before artmark can inspect the path.
+#[cfg(target_os = "linux")]
 #[test]
 fn context_init_json_handles_non_utf8_current_directory() {
     use std::os::unix::ffi::OsStringExt;
