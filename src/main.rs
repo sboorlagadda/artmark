@@ -99,7 +99,7 @@ enum ContextCommand {
 
 const CONTEXT_START: &str = "<!-- artmark:context:start -->";
 const CONTEXT_END: &str = "<!-- artmark:context:end -->";
-const CONTEXT_GUIDANCE: &str = "<!-- artmark:context:start -->\n## Using artmark\n\nartmark is a local catalog of artifact pointers and retrieval hints. The original source remains authoritative; artmark does not fetch providers or store source documents.\n\n- When the user provides a durable artifact locator, register it with `artmark add <uri> --json`. Add `--explicit` when the user asks to save or remember it.\n- Index a search card only after the source was inspected or the user asked to save it. Keep source facts separate from your summary, and do not copy source content or secrets.\n- To find an earlier artifact, use `artmark search <query> --json`, inspect likely matches with `artmark get <id> --json`, then retrieve current details through the appropriate provider tool.\n- Ask before registering artifacts discovered independently through searches or other research.\n\n<!-- artmark:context:end -->\n";
+const CONTEXT_GUIDANCE: &str = "<!-- artmark:context:start -->\n## Using artmark\n\nartmark is a local catalog of artifact pointers and retrieval hints. The original source remains authoritative; artmark does not fetch providers or store source documents.\n\n- When the user provides a durable artifact locator, register it with `artmark add <uri> --json`. Add `--explicit` when the user asks to save or remember it.\n- Index a search card only after inspecting the source. If the user asks to save it but the source cannot be inspected, keep only the quick registration. Do not invent a search card. Keep source facts separate from your summary, and do not copy source content or secrets.\n- To find an earlier artifact, use `artmark search <query> --json`, inspect likely matches with `artmark get <id> --json`, then retrieve current details through the appropriate provider tool.\n- Ask before registering artifacts discovered independently through searches or other research.\n\n<!-- artmark:context:end -->\n";
 
 fn main() {
     if let Err((code, error)) = run() {
@@ -365,7 +365,7 @@ fn init_context() -> Result<serde_json::Value> {
     }
 
     Ok(json!({
-        "path": agents_path,
+        "path": agents_path.display().to_string(),
         "action": action
     }))
 }
