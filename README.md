@@ -132,6 +132,8 @@ artmark is an artifact registry. The source system still owns the artifact.
 
 The repository includes an [artmark skill](skills/artmark/SKILL.md) that teaches a Codex agent how to use the registry. Copy `skills/artmark` from this checkout or a release archive to `~/.codex/skills/artmark`. The skill checks whether the CLI is available when first used in a session. Installing or upgrading the CLI is a separate setup step that you request explicitly.
 
+If the skill is not installed, `artmark doctor` reports that and suggests either installing the skill or running `artmark context init`. The context command adds a managed artmark section to the `AGENTS.md` file in the current directory. It can be run again to refresh that section and preserves instructions outside its markers.
+
 The agent workflow is:
 
 ```text
@@ -277,9 +279,12 @@ Other commands include:
 recent
 stats
 doctor
+context init
 reindex
 forget
 ```
+
+`artmark context init` works without opening the artmark database. Run it from the project directory where the agent should receive the artmark guidance.
 
 `reindex` rebuilds the local FTS5 index from artmark's catalog.
 

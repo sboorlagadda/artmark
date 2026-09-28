@@ -82,9 +82,24 @@ enum Command {
     Reindex,
     /// Check database and search index health
     Doctor,
+    /// Add artmark guidance to the current directory's AGENTS.md
+    Context {
+        #[command(subcommand)]
+        command: ContextCommand,
+    },
     /// Show counts by state and provider
     Stats,
 }
+
+#[derive(Subcommand)]
+enum ContextCommand {
+    /// Create or refresh the managed artmark guidance section
+    Init,
+}
+
+const CONTEXT_START: &str = "<!-- artmark:context:start -->";
+const CONTEXT_END: &str = "<!-- artmark:context:end -->";
+const CONTEXT_GUIDANCE: &str = "<!-- artmark:context:start -->\n## Using artmark\n\nartmark is a local catalog of artifact pointers and retrieval hints. The original source remains authoritative; artmark does not fetch providers or store source documents.\n\n- When the user provides a durable artifact locator, register it with `artmark add <uri> --json`. Add `--explicit` when the user asks to save or remember it.\n- Index a search card only after the source was inspected or the user asked to save it. Keep source facts separate from your summary, and do not copy source content or secrets.\n- To find an earlier artifact, use `artmark search <query> --json`, inspect likely matches with `artmark get <id> --json`, then retrieve current details through the appropriate provider tool.\n- Ask before registering artifacts discovered independently through searches or other research.\n\n<!-- artmark:context:end -->\n";
 
 fn main() {
     if let Err((code, error)) = run() {
@@ -97,6 +112,20 @@ type Outcome<T> = std::result::Result<T, (i32, anyhow::Error)>;
 
 fn run() -> Outcome<()> {
     let cli = Cli::parse();
+    if matches!(
+        &cli.command,
+        Command::Context {
+            command: ContextCommand::Init
+        }
+    ) {
+        let report = init_context().map_err(input_error)?;
+        if cli.json {
+            emit(&report);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        }
+        return Ok(());
+    }
     let path = match cli.database {
         Some(path) => path,
         None => default_database().map_err(input_error)?,
@@ -227,7 +256,8 @@ fn run() -> Outcome<()> {
             }
         }
         Command::Doctor => {
-            let report = db.doctor().map_err(database_error)?;
+            let mut report = db.doctor().map_err(database_error)?;
+            report["agent_setup"] = agent_setup_report();
             if cli.json {
                 emit(&report);
             } else {
@@ -245,8 +275,134 @@ fn run() -> Outcome<()> {
                 println!("{}", serde_json::to_string_pretty(&stats).unwrap());
             }
         }
+        Command::Context { .. } => {
+            unreachable!("context commands are handled before opening the database")
+        }
     }
     Ok(())
+}
+
+fn init_context() -> Result<serde_json::Value> {
+    let agents_path = std::env::current_dir()?.join("AGENTS.md");
+    if std::fs::symlink_metadata(&agents_path)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        anyhow::bail!(
+            "{} is a symbolic link; refusing to edit it",
+            agents_path.display()
+        );
+    }
+    let (original, existed) = match std::fs::read_to_string(&agents_path) {
+        Ok(contents) => (contents, true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (String::new(), false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("cannot read {}", agents_path.display()));
+        }
+    };
+
+    let newline = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let section = if newline == "\n" {
+        CONTEXT_GUIDANCE.to_owned()
+    } else {
+        CONTEXT_GUIDANCE.replace('\n', newline)
+    };
+    let start_count = original.matches(CONTEXT_START).count();
+    let end_count = original.matches(CONTEXT_END).count();
+    let mut action = if existed { "updated" } else { "created" };
+
+    let updated = if start_count == 0 && end_count == 0 {
+        let mut next = original.clone();
+        if !next.is_empty() {
+            let blank_line = format!("{newline}{newline}");
+            if !next.ends_with(newline) {
+                next.push_str(newline);
+            }
+            if !next.ends_with(&blank_line) {
+                next.push_str(newline);
+            }
+        }
+        next.push_str(&section);
+        next
+    } else if start_count == 1 && end_count == 1 {
+        let start = original.find(CONTEXT_START).unwrap();
+        let end = original.find(CONTEXT_END).unwrap();
+        if start >= end
+            || !marker_is_on_own_line(&original, start, CONTEXT_START)
+            || !marker_is_on_own_line(&original, end, CONTEXT_END)
+        {
+            anyhow::bail!(
+                "{} has malformed artmark context markers; repair or remove the markers before retrying",
+                agents_path.display()
+            );
+        }
+        let after_end = end + CONTEXT_END.len();
+        let mut next = String::with_capacity(original.len() + section.len());
+        next.push_str(&original[..start]);
+        next.push_str(&section);
+        next.push_str(&original[after_end..]);
+        next
+    } else {
+        anyhow::bail!(
+            "{} has an incomplete or duplicated artmark context marker pair; repair or remove the markers before retrying",
+            agents_path.display()
+        );
+    };
+
+    if updated == original {
+        action = "unchanged";
+    } else {
+        std::fs::write(&agents_path, updated)
+            .with_context(|| format!("cannot write {}", agents_path.display()))?;
+    }
+
+    Ok(json!({
+        "path": agents_path,
+        "action": action
+    }))
+}
+
+fn marker_is_on_own_line(contents: &str, position: usize, marker: &str) -> bool {
+    let before = &contents[..position];
+    let after = &contents[position + marker.len()..];
+    (position == 0 || before.ends_with('\n'))
+        && (after.is_empty() || after.starts_with('\n') || after.starts_with("\r\n"))
+}
+
+fn agent_setup_report() -> serde_json::Value {
+    let skill_path = codex_home().map(|home| home.join("skills/artmark/SKILL.md"));
+    let installed = skill_path.as_ref().is_some_and(|path| path.is_file());
+    let skill_path = skill_path.map(|path| path.display().to_string());
+    let suggestions = if installed {
+        Vec::new()
+    } else {
+        vec![
+            "Install the artmark Codex skill for the full agent workflow.".to_owned(),
+            "Run artmark context init to add project-local artmark guidance to AGENTS.md."
+                .to_owned(),
+        ]
+    };
+    json!({
+        "codex_skill_installed": installed,
+        "codex_skill_path": skill_path,
+        "suggestions": suggestions
+    })
+}
+
+fn codex_home() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("CODEX_HOME") {
+        if !path.is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    home.map(|path| path.join(".codex"))
 }
 
 fn default_database() -> Result<PathBuf> {
