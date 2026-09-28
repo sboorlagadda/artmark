@@ -265,3 +265,204 @@ fn default_database_uses_platform_home() {
     assert!(home.join(".artmark/artmark.db").is_file());
     fs::remove_dir_all(home).unwrap();
 }
+
+fn run_context_init(directory: &Path) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_artmark"));
+    command
+        .args(["context", "init", "--json"])
+        .current_dir(directory)
+        .env_remove("ARTMARK_DB");
+    #[cfg(windows)]
+    command.env("USERPROFILE", directory);
+    #[cfg(not(windows))]
+    command.env("HOME", directory);
+    command.output().unwrap()
+}
+
+fn run_doctor_with_codex_home(directory: &Path, codex_home: &Path) -> std::process::Output {
+    let database = directory.join("doctor.db");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_artmark"));
+    command
+        .args(["--database", database.to_str().unwrap(), "doctor", "--json"])
+        .current_dir(directory)
+        .env("CODEX_HOME", codex_home)
+        .env_remove("ARTMARK_DB");
+    command.output().unwrap()
+}
+
+#[test]
+fn doctor_reports_missing_and_installed_codex_skill() {
+    let dir = std::env::temp_dir().join(format!("artmark-doctor-skill-{}", Uuid::now_v7()));
+    let codex_home = dir.join("codex-home");
+    let skill_path = codex_home.join("skills/artmark/SKILL.md");
+    fs::create_dir_all(&dir).unwrap();
+
+    let missing = run_doctor_with_codex_home(&dir, &codex_home);
+    assert!(
+        missing.status.success(),
+        "{}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+    let missing_report: Value = serde_json::from_slice(&missing.stdout).unwrap();
+    let missing_setup = &missing_report["agent_setup"];
+    assert_eq!(missing_setup["codex_skill_installed"], false);
+    assert_eq!(
+        missing_setup["codex_skill_path"],
+        skill_path.display().to_string()
+    );
+    let suggestions = missing_setup["suggestions"].as_array().unwrap();
+    assert!(
+        suggestions
+            .iter()
+            .any(|item| item.as_str().unwrap().contains("skill"))
+    );
+    assert!(
+        suggestions
+            .iter()
+            .any(|item| item.as_str().unwrap().contains("artmark context init"))
+    );
+
+    fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+    fs::write(&skill_path, "---\nname: artmark\n---\n").unwrap();
+    let existing = run_doctor_with_codex_home(&dir, &codex_home);
+    assert!(
+        existing.status.success(),
+        "{}",
+        String::from_utf8_lossy(&existing.stderr)
+    );
+    let existing_report: Value = serde_json::from_slice(&existing.stdout).unwrap();
+    let existing_setup = &existing_report["agent_setup"];
+    assert_eq!(existing_setup["codex_skill_installed"], true);
+    assert_eq!(
+        existing_setup["codex_skill_path"],
+        skill_path.display().to_string()
+    );
+    assert_eq!(existing_setup["suggestions"].as_array().unwrap().len(), 0);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn context_init_creates_and_updates_idempotently_and_rejects_bad_markers() {
+    let dir = std::env::temp_dir().join(format!("artmark-context-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+
+    let fresh_dir = dir.join("fresh-project");
+    fs::create_dir(&fresh_dir).unwrap();
+    let fresh_first = run_context_init(&fresh_dir);
+    assert!(
+        fresh_first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fresh_first.stderr)
+    );
+    let fresh_first_result: Value = serde_json::from_slice(&fresh_first.stdout).unwrap();
+    assert_eq!(fresh_first_result["action"], "created");
+    let fresh_agents = fs::read_to_string(fresh_dir.join("AGENTS.md")).unwrap();
+    let fresh_second = run_context_init(&fresh_dir);
+    assert!(
+        fresh_second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fresh_second.stderr)
+    );
+    let fresh_second_result: Value = serde_json::from_slice(&fresh_second.stdout).unwrap();
+    assert_eq!(fresh_second_result["action"], "unchanged");
+    assert_eq!(
+        fs::read_to_string(fresh_dir.join("AGENTS.md")).unwrap(),
+        fresh_agents
+    );
+    assert!(!fresh_dir.join(".artmark/artmark.db").exists());
+
+    let agents = dir.join("AGENTS.md");
+    let prefix = "# Project\r\n\r\nKeep this before the generated section.\r\n\r\n";
+    let old_section = "<!-- artmark:context:start -->\r\nOld artmark instructions.\r\n<!-- artmark:context:end -->";
+    let suffix = "\r\n\r\nKeep this after the generated section.\r\n";
+    fs::write(&agents, format!("{prefix}{old_section}{suffix}")).unwrap();
+
+    let first = run_context_init(&dir);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_result: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first_result["action"], "updated");
+    let generated = fs::read_to_string(&agents).unwrap();
+    assert!(generated.starts_with(prefix));
+    assert!(generated.ends_with(suffix));
+    assert!(generated.contains("## Using artmark"));
+    assert!(
+        !generated.replace("\r\n", "").contains('\n'),
+        "context init should preserve CRLF throughout the file"
+    );
+
+    let second = run_context_init(&dir);
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_result: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second_result["action"], "unchanged");
+    assert_eq!(fs::read_to_string(&agents).unwrap(), generated);
+    assert!(!dir.join(".artmark/artmark.db").exists());
+
+    let malformed_cases = [
+        (
+            "incomplete",
+            "# Project\n<!-- artmark:context:start -->\nIncomplete section\n",
+        ),
+        (
+            "duplicated",
+            "<!-- artmark:context:start -->\nfirst\n<!-- artmark:context:end -->\n<!-- artmark:context:start -->\nsecond\n<!-- artmark:context:end -->\n",
+        ),
+        (
+            "malformed",
+            "# Project <!-- artmark:context:start -->\nOld section\n<!-- artmark:context:end -->\n",
+        ),
+        (
+            "reversed",
+            "<!-- artmark:context:end -->\nOld section\n<!-- artmark:context:start -->\n",
+        ),
+    ];
+    for (name, contents) in malformed_cases {
+        let case_dir = dir.join(name);
+        fs::create_dir(&case_dir).unwrap();
+        let case_agents = case_dir.join("AGENTS.md");
+        fs::write(&case_agents, contents).unwrap();
+        let output = run_context_init(&case_dir);
+        assert_eq!(output.status.code(), Some(6), "case: {name}");
+        assert!(output.stdout.is_empty(), "case: {name}");
+        assert_eq!(
+            fs::read_to_string(&case_agents).unwrap(),
+            contents,
+            "case: {name}"
+        );
+    }
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+// macOS rejects non-UTF-8 filenames before artmark can inspect the path.
+#[cfg(target_os = "linux")]
+#[test]
+fn context_init_json_handles_non_utf8_current_directory() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let mut name = format!("artmark-nonutf8-{}", Uuid::now_v7()).into_bytes();
+    name.push(0xff);
+    let dir = std::env::temp_dir().join(std::ffi::OsString::from_vec(name));
+    fs::create_dir(&dir).unwrap();
+
+    let output = run_context_init(&dir);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["action"], "created");
+    assert!(result["path"].as_str().unwrap().contains('\u{fffd}'));
+    assert!(dir.join("AGENTS.md").is_file());
+
+    fs::remove_dir_all(dir).unwrap();
+}
