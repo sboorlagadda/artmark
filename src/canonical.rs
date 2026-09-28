@@ -12,9 +12,13 @@ pub struct Identity {
 }
 
 pub fn identify(input: &str) -> Result<Identity> {
+    crate::credentials::validate(input)?;
     let input = input.trim();
     if input.is_empty() {
         bail!("artifact URI cannot be empty");
+    }
+    if input.starts_with("//") {
+        return local_path(Path::new(input), input);
     }
     let mut url = match Url::parse(input) {
         Ok(url) => url,
@@ -222,6 +226,69 @@ mod tests {
         let b = identify("https://example.com/foo?q=1#bottom").unwrap();
         assert_eq!(a.canonical_key, b.canonical_key);
         assert!(a.canonical_key.contains("?q=1"));
+    }
+
+    #[test]
+    fn plain_fragment_anchors_are_not_credentials() {
+        let plain = identify("https://example.com/docs").unwrap();
+        for anchor in ["code", "token", "signature", "auth"] {
+            let with_anchor = identify(&format!("https://example.com/docs#{anchor}")).unwrap();
+            assert_eq!(with_anchor.canonical_key, plain.canonical_key);
+        }
+    }
+
+    #[test]
+    fn safe_double_slash_paths_remain_local_paths() {
+        for path in ["//localhost/artmark-missing/file", "///tmp/artmark-file"] {
+            let identity = identify(path).unwrap();
+            assert_eq!(identity.provider.as_deref(), Some("filesystem"));
+        }
+    }
+
+    #[test]
+    fn generic_code_query_identifies_distinct_artifacts() {
+        let first = identify("https://example.com/products?code=ABC").unwrap();
+        let same = identify("https://EXAMPLE.com/products?code=ABC#details").unwrap();
+        let second = identify("https://example.com/products?code=XYZ").unwrap();
+        assert_eq!(first.canonical_key, same.canonical_key);
+        assert_ne!(first.canonical_key, second.canonical_key);
+        assert!(identify("https://example.com/callback?code=secret").is_err());
+        assert!(identify("https://example.com/products?code=ABC&state=CA").is_ok());
+    }
+
+    #[test]
+    fn credential_parameters_and_userinfo_are_rejected() {
+        for uri in [
+            "https://example.com/file?token=secret",
+            "https://example.com/file?access%5Ftoken=secret",
+            "https://example.com/file?API-Key=secret",
+            "https://example.com/file?X-Amz-Signature=secret&X-Amz-Expires=300",
+            "https://example.com/file?X-Goog-Credential=secret",
+            "https://example.com/file?GoogleAccessId=user&Signature=secret",
+            "https://example.com/file?sv=1&sig=secret",
+            "https://example.com/callback?code=secret&state=abc",
+            "https://example.com/redirect?next=https%3A%2F%2Fexample.org%2Ffile%3Ftoken%3Dsecret",
+            "https://example.com/redirect?next=%2Fdownload%3Ftoken%3Dsecret",
+            "https://example.com/redirect?next=%2F%2Fexample.org%2Ffile%3Fsig%3Dsecret",
+            "https://example.com/redirect?next=download%3Ftoken%3Dsecret",
+            "https://example.com/redirect?next=https%253A%252F%252Fexample.org%252Ffile%253Ftoken%253Dsecret",
+            "https://example.com/file#access_token=secret",
+            "https://example.com/file#section?session_id=secret",
+            "https://example.com/file#next=https%3A%2F%2Fexample.org%2Ffile%3Ftoken%3Dsecret",
+            "https://example.com/file#next=%2Fdownload%3Ftoken%3Dsecret",
+            "https://example.com/file#next=https://user:secret@example.org/file?view=1",
+            "https://example.com/file#https://user:secret@example.org/file",
+            "https://proxy.example/https://user:secret@example.org/file",
+            "https://proxy.example/https%3A%2F%2Fuser%3Asecret%40example.org%2Ffile",
+            "archive/https://user:secret@example.org/file",
+            "https://user:secret@example.com/file",
+            "//user:secret@example.com/file",
+            "file:///tmp/report?token=secret",
+            "https://docs.google.com/document/d/ABC/edit?token=secret",
+        ] {
+            let error = identify(uri).unwrap_err().to_string();
+            assert!(!error.contains("secret"), "{error}");
+        }
     }
 
     #[test]

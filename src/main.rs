@@ -1,4 +1,7 @@
 mod canonical;
+#[cfg(test)]
+mod credential_cases;
+mod credentials;
 mod db;
 mod model;
 

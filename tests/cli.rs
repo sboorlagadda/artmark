@@ -1,3 +1,4 @@
+use rusqlite::Connection;
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
@@ -30,6 +31,171 @@ fn run(db: &Path, args: &[&str], input: Option<&str>) -> (i32, Value) {
         output.status.code().unwrap(),
         serde_json::from_str(&stdout).unwrap_or_else(|_| panic!("invalid JSON: {stdout}")),
     )
+}
+
+fn row_counts(db: &Path) -> (i64, i64, i64) {
+    let conn = Connection::open(db).unwrap();
+    let count = |table| {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    };
+    (count("artifacts"), count("aliases"), count("artifact_fts"))
+}
+
+#[test]
+fn credential_urls_leave_no_catalog_rows_or_secret_in_output() {
+    let dir = std::env::temp_dir().join(format!("artmark-credentials-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+    let secret = "secret-should-never-appear-in-error";
+    for uri in [
+        format!("https://example.com/file?token={secret}"),
+        format!("https://example.com/file?X-Amz-Signature={secret}"),
+        format!("https://example.com/file?sig={secret}"),
+        format!("https://user:{secret}@example.com/file"),
+        format!("//user:{secret}@example.com/file"),
+        format!("https://example.com/file?next=%2Fdownload%3Ftoken%3D{secret}"),
+        format!(
+            "https://example.com/file?next=https%253A%252F%252Fexample.org%252Ffile%253Ftoken%253D{secret}"
+        ),
+        format!(
+            "https://example.com/file#next=https%3A%2F%2Fexample.org%2Ffile%3Ftoken%3D{secret}"
+        ),
+        format!("https://example.com/file#https://user:{secret}@example.org/file"),
+        format!("https://proxy.example/https://user:{secret}@example.org/file"),
+        format!("https://proxy.example/https%3A%2F%2Fuser%3A{secret}%40example.org%2Ffile"),
+        format!("archive/https://user:{secret}@example.org/file"),
+        format!("https://proxy.example/https://user:{secret}@example.org/../../safe"),
+        format!("https://example.com/file#access_token%253D{secret}"),
+        format!("https://docs.google.com/document/d/ABC/edit?resourcekey={secret}"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+            .args(["--database", db.to_str().unwrap(), "add", &uri, "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(6));
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        assert_eq!(row_counts(&db), (0, 0, 0));
+    }
+
+    let (code, first) = run(&db, &["add", "https://example.com/item?id=1"], None);
+    assert_eq!(code, 0);
+    let (_, duplicate) = run(&db, &["add", "https://EXAMPLE.com/item?id=1#heading"], None);
+    assert_eq!(duplicate["id"], first["id"]);
+    let (_, distinct) = run(&db, &["add", "https://example.com/item?id=2"], None);
+    assert_ne!(distinct["id"], first["id"]);
+    assert_eq!(row_counts(&db), (2, 3, 2));
+
+    let (code, nested) = run(
+        &db,
+        &[
+            "add",
+            "https://example.com/item?next=%2Fpage%3Fid%3D3&empty=",
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_ne!(nested["id"], first["id"]);
+    assert_eq!(row_counts(&db), (3, 4, 3));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+        .args([
+            "--database",
+            db.to_str().unwrap(),
+            "add",
+            &format!("https://example.com/item?id=1&access_token={secret}"),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+    assert_eq!(row_counts(&db), (3, 4, 3));
+
+    let (code, _) = run(
+        &db,
+        &["add", "https://docs.google.com/document/d/ABC/edit"],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(row_counts(&db), (4, 5, 4));
+    let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+        .args([
+            "--database",
+            db.to_str().unwrap(),
+            "add",
+            &format!("https://docs.google.com/document/d/ABC/view?token={secret}"),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+    assert_eq!(row_counts(&db), (4, 5, 4));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn plain_credential_named_anchor_registers_as_an_alias() {
+    let dir = std::env::temp_dir().join(format!("artmark-anchor-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+    let (code, first) = run(&db, &["add", "https://example.com/docs"], None);
+    assert_eq!(code, 0);
+    let (code, second) = run(&db, &["add", "https://example.com/docs#code"], None);
+    assert_eq!(code, 0);
+    assert_eq!(second["id"], first["id"]);
+    assert_eq!(row_counts(&db), (1, 2, 1));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn safe_double_slash_path_registers_as_filesystem_artifact() {
+    let dir = std::env::temp_dir().join(format!("artmark-unc-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+    let (code, added) = run(&db, &["add", "//localhost/artmark-missing/file"], None);
+    assert_eq!(code, 0);
+    let (_, artifact) = run(&db, &["get", added["id"].as_str().unwrap()], None);
+    assert_eq!(artifact["provider"], "filesystem");
+    assert_eq!(row_counts(&db), (1, 1, 1));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn ordinary_code_query_registers_and_deduplicates() {
+    let dir = std::env::temp_dir().join(format!("artmark-code-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+    let (code, first) = run(
+        &db,
+        &["add", "https://example.com/products?code=ABC&state=CA"],
+        None,
+    );
+    assert_eq!(code, 0);
+    let (code, duplicate) = run(
+        &db,
+        &[
+            "add",
+            "https://EXAMPLE.com/products?code=ABC&state=CA#details",
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(duplicate["id"], first["id"]);
+    let (code, distinct) = run(
+        &db,
+        &["add", "https://example.com/products?code=XYZ&state=CA"],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_ne!(distinct["id"], first["id"]);
+    assert_eq!(row_counts(&db), (2, 3, 2));
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
