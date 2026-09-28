@@ -393,10 +393,10 @@ fn agent_setup_report() -> serde_json::Value {
 }
 
 fn codex_home() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("CODEX_HOME") {
-        if !path.is_empty() {
-            return Some(PathBuf::from(path));
-        }
+    if let Some(path) = std::env::var_os("CODEX_HOME")
+        && !path.is_empty()
+    {
+        return Some(PathBuf::from(path));
     }
     #[cfg(windows)]
     let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
