@@ -130,9 +130,9 @@ artmark is an artifact registry. The source system still owns the artifact.
 
 ## Use artmark with an agent
 
-The repository includes an [artmark skill](skills/artmark/SKILL.md) that teaches a Codex agent how to use the registry. Copy `skills/artmark` from this checkout or a release archive to `~/.codex/skills/artmark`. The skill checks whether the CLI is available when first used in a session. Installing or upgrading the CLI is a separate setup step that you request explicitly.
+The repository includes an [artmark skill](skills/artmark/SKILL.md) that teaches agents how to use the registry. Copy `skills/artmark` from this checkout or a release archive to `~/.codex/skills/artmark` for Codex or `~/.claude/skills/artmark` for Claude Code. The skill checks whether the CLI is available when first used in a session. Installing or upgrading the CLI is a separate setup step that you request explicitly.
 
-If the skill is not installed, `artmark doctor` reports that and suggests either installing the skill or running `artmark context init`. The context command adds a managed artmark section to the `AGENTS.md` file in the current directory. It can be run again to refresh that section and preserves instructions outside its markers.
+`artmark doctor` checks for the Codex skill and suggests either installing it or running `artmark context init` when it is missing. The context command adds a managed artmark section to the `AGENTS.md` file in the current directory. It can be run again to refresh that section and preserves instructions outside its markers.
 
 The agent workflow is:
 
@@ -140,10 +140,10 @@ The agent workflow is:
 1. Register pointers for durable artifacts you provide.
 2. When asked to save one, or when already reading it, resolve the source with an existing tool.
 3. Create a short search card from what it learned and index that card in artmark.
-4. In a later session, search artmark, then retrieve the current source through the provider tool.
+4. When a task requires identifying an artifact by description, search artmark before a provider search, even if the provider is named. Then retrieve the current source through the provider tool.
 ```
 
-The agent asks before registering artifacts it discovers independently through searches. See [AGENTS.md](AGENTS.md) for the full registration policy.
+At the end of a task, the agent asks which relevant artifacts discovered through research or linked from something you supplied should be remembered. It does not register those links without your approval. See [AGENTS.md](AGENTS.md) for the full registration policy.
 
 ## Local by design
 

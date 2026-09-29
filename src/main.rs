@@ -99,7 +99,19 @@ enum ContextCommand {
 
 const CONTEXT_START: &str = "<!-- artmark:context:start -->";
 const CONTEXT_END: &str = "<!-- artmark:context:end -->";
-const CONTEXT_GUIDANCE: &str = "<!-- artmark:context:start -->\n## Using artmark\n\nartmark is a local catalog of artifact pointers and retrieval hints. The original source remains authoritative; artmark does not fetch providers or store source documents.\n\n- When the user provides a durable artifact locator, register it with `artmark add <uri> --json`. Add `--explicit` when the user asks to save or remember it.\n- Index a search card only after inspecting the source. If the user asks to save it but the source cannot be inspected, keep only the quick registration. Do not invent a search card. Keep source facts separate from your summary, and do not copy source content or secrets.\n- To find an earlier artifact, use `artmark search <query> --json`, inspect likely matches with `artmark get <id> --json`, then retrieve current details through the appropriate provider tool.\n- Ask before registering artifacts discovered independently through searches or other research.\n\n<!-- artmark:context:end -->\n";
+const CONTEXT_GUIDANCE: &str = r#"<!-- artmark:context:start -->
+## Using artmark
+
+artmark is a local catalog of artifact pointers and retrieval hints. The original source remains authoritative; artmark does not fetch providers or store source documents.
+
+- When the user provides a durable artifact locator, register it with `artmark add <uri> --json`. Add `--explicit` when the user asks to save or remember it.
+- Index a search card only after inspecting the source. If the user asks to save it but the source cannot be inspected, keep only the quick registration. Do not invent a search card. Keep source facts separate from your summary, and do not copy source content or secrets.
+- Whenever the task requires identifying a durable artifact from a description without an exact locator, use `artmark search <query> --json` before provider search, even if the provider is named. Inspect likely matches with `artmark get <id> --json`, then retrieve current details through the provider.
+- At the end of the task, ask which relevant artifacts discovered through research or linked from a user-supplied artifact should be remembered. Register only those the user approves.
+- For a confirmed supersession relationship, keep a brief direct predecessor or successor note in each registered artifact's summary. Do not use special relation tags or accumulate version history.
+
+<!-- artmark:context:end -->
+"#;
 
 fn main() {
     if let Err((code, error)) = run() {
@@ -212,13 +224,17 @@ fn run() -> Outcome<()> {
             if cli.json {
                 emit(&json!({"results": results}));
             } else {
-                for item in results {
-                    println!(
-                        "{}\t{}\t{}",
-                        item.id,
-                        item.title.as_deref().unwrap_or("(untitled)"),
-                        item.primary_uri.as_deref().unwrap_or("")
-                    );
+                if results.is_empty() {
+                    println!("No results found.");
+                } else {
+                    for item in results {
+                        println!(
+                            "{}\t{}\t{}",
+                            item.id,
+                            item.title.as_deref().unwrap_or("(untitled)"),
+                            item.primary_uri.as_deref().unwrap_or("")
+                        );
+                    }
                 }
             }
         }

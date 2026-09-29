@@ -244,6 +244,29 @@ fn cli_registry_and_fts_work_end_to_end() {
 }
 
 #[test]
+fn empty_search_explains_the_result_in_human_mode() {
+    let dir = std::env::temp_dir().join(format!("artmark-empty-search-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+        .args(["--database", db.to_str().unwrap(), "search", "unknown"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "No results found.\n"
+    );
+    assert!(output.stderr.is_empty());
+
+    let (code, json) = run(&db, &["search", "unknown"], None);
+    assert_eq!(code, 0);
+    assert_eq!(json["results"].as_array().unwrap().len(), 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn default_database_uses_platform_home() {
     let home = std::env::temp_dir().join(format!("artmark-home-{}", Uuid::now_v7()));
     fs::create_dir_all(&home).unwrap();
