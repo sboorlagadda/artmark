@@ -1,6 +1,6 @@
 ---
 name: artmark
-description: Find and remember durable sources with the local artmark CLI. When asked to find, open, or review a shared file, message, design, diagram, ticket, PR, or similar source without an exact link or path, search artmark before available provider tools, even if the provider is named. Also apply when the user supplies a link, asks to save one, or research surfaces useful durable sources.
+description: Find and remember durable sources with the local artmark CLI. Apply whenever a task requires locating an existing shared file, message, design, diagram, ticket, PR, or similar source from a description rather than an exact link or path. Search artmark before available provider tools, even if the provider is named. Also apply when the user supplies a link, asks to save one, or research surfaces useful durable sources.
 ---
 
 # artmark
@@ -155,7 +155,7 @@ When the user or a live source confirms that one artifact supersedes another, ke
 
 ## Find artifacts by description
 
-When the user asks to locate or read a durable artifact by description, search artmark before searching the provider. This applies whether or not the user says they have seen it before, and even when they name a provider, person, topic, or recent event. If the user supplies the exact locator, register it under the policy above and use that locator directly. Before asking the user to resend a previously supplied artifact, search artmark:
+Whenever completing the user's task requires identifying an existing durable artifact from a description, search artmark before searching the provider. This includes tasks to review or update the artifact, whether or not the user explicitly says "find" or says they have seen it before, and even when they name a provider, person, topic, or recent event. If the user supplies the exact locator, register it under the policy above and use that locator directly. Before asking the user to resend a previously supplied artifact, search artmark:
 
 ```text
 artmark search <query> --json
