@@ -1,6 +1,6 @@
 [package]
 name = "artmark"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Local artifact catalog and FTS5 search for AI agents"
 license = "Apache-2.0"

@@ -19,25 +19,7 @@ TARGETS = {
     "aarch64-apple-darwin": ("artmark", ".tar.gz"),
     "x86_64-pc-windows-msvc": ("artmark.exe", ".zip"),
 }
-EXTRAS = (
-    Path("README.md"),
-    Path("SECURITY.md"),
-    Path("CHANGELOG.md"),
-    Path("assets/logo.png"),
-    Path("assets/logo-symbol.svg"),
-    Path("assets/logo-wordmark.svg"),
-    Path("assets/logo-monochrome.svg"),
-    Path("assets/hero-image.png"),
-    Path("assets/social-image.png"),
-    Path("assets/social-preview.png"),
-    Path("LICENSE"),
-    Path("CONTRIBUTING.md"),
-    Path("AGENTS.md"),
-    Path("docs/design.md"),
-    Path("docs/credential-validation.md"),
-    Path("docs/brand-kit.md"),
-    Path("skills/artmark/SKILL.md"),
-)
+EXTRAS = (Path("LICENSE"), Path("skills/artmark/SKILL.md"))
 
 
 def archive_name(version: str, target: str) -> str:
@@ -82,13 +64,15 @@ def verify(dist: Path, version: str) -> None:
             raise ValueError(f"checksum mismatch for {archive.name}")
         if extension == ".zip":
             with zipfile.ZipFile(archive) as packed:
-                names = set(packed.namelist())
+                names = packed.namelist()
         else:
             with tarfile.open(archive, "r:gz") as packed:
-                names = set(packed.getnames())
+                names = packed.getnames()
         required = {binary, *(path.as_posix() for path in EXTRAS)}
-        if not required.issubset(names):
-            raise ValueError(f"archive contents incomplete: {archive.name}")
+        if len(names) != len(required) or set(names) != required:
+            raise ValueError(
+                f"unexpected archive contents in {archive.name}: {sorted(set(names) ^ required)}"
+            )
     actual_files = {path.name for path in dist.iterdir() if path.is_file()}
     if actual_files != expected_files:
         raise ValueError(f"unexpected release files: {sorted(actual_files ^ expected_files)}")

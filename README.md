@@ -177,6 +177,8 @@ The agent's provider tools remain responsible for retrieving current source cont
 
 Download the latest prebuilt binary and its matching `.sha256` file from [GitHub Releases](https://github.com/sboorlagadda/artmark/releases/latest). These instructions use the `v0.1.0` filenames; substitute the filenames shown on the latest release if it is newer.
 
+Starting with `v0.2.1`, each archive contains the executable, the artmark agent skill at `skills/artmark/SKILL.md`, and `LICENSE`.
+
 Pick the archive for your machine:
 
 | Platform | Archive suffix |
