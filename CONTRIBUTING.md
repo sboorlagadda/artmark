@@ -33,4 +33,4 @@ Dependabot vulnerability alerts are enabled for this repository. When addressing
 
 ## Releases
 
-A successful push to `main` builds and tests the CLI on Linux x86-64, Windows x86-64, macOS Intel, and macOS Apple Silicon. The workflow publishes the new `vX.Y.Z` release after all four archives and checksums pass verification. Each archive includes the binary, README, security policy, changelog, design and contributor guidance, brand assets, and agent skill. GitHub Releases are the primary install channel; the crate is not published to crates.io.
+A successful push to `main` builds and tests the CLI on Linux x86-64, Windows x86-64, macOS Intel, and macOS Apple Silicon. The workflow publishes the new `vX.Y.Z` release after all four archives and checksums pass verification. Each archive contains only the binary, `skills/artmark/SKILL.md`, and the required `LICENSE`. GitHub Releases are the primary install channel; the crate is not published to crates.io.

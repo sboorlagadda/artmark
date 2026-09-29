@@ -40,19 +40,29 @@ def smoke(archive: Path, target: str) -> None:
         bin_dir = home / ".local" / "bin"
         bin_dir.mkdir(parents=True)
         installed = bin_dir / binary_name
+        skill_name = "skills/artmark/SKILL.md"
         if extension == ".zip":
             with zipfile.ZipFile(archive) as package:
                 installed.write_bytes(package.read(binary_name))
+                skill = package.read(skill_name)
         else:
             with tarfile.open(archive, "r:gz") as package:
                 source = package.extractfile(binary_name)
                 if source is None:
                     raise ValueError(f"missing binary: {binary_name}")
                 installed.write_bytes(source.read())
+                source = package.extractfile(skill_name)
+                if source is None:
+                    raise ValueError(f"missing skill: {skill_name}")
+                skill = source.read()
             installed.chmod(0o755)
+        skill_path = home / ".codex" / skill_name
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_bytes(skill)
 
         env = os.environ.copy()
         env.pop("ARTMARK_DB", None)
+        env["CODEX_HOME"] = str(home / ".codex")
         if sys.platform == "win32":
             env.pop("HOME", None)
             env["USERPROFILE"] = str(home)
@@ -64,6 +74,9 @@ def smoke(archive: Path, target: str) -> None:
 
         binary = str(installed)
         version = run(binary, ["--version"], env, home)
+        doctor = json.loads(run(binary, ["doctor", "--json"], env, home))
+        if doctor["agent_setup"]["codex_skill_installed"] is not True:
+            raise ValueError("new install could not find the bundled skill")
         added = json.loads(run(binary, ["add", "https://example.com/fresh-install", "--json"], env, home))
         card = json.dumps({"catalog": {"summary": "First install test", "search_text": "fresh install smoke test"}})
         run(binary, ["index", added["id"], "--json-input", "-", "--json"], env, home, card)
@@ -72,7 +85,7 @@ def smoke(archive: Path, target: str) -> None:
             raise ValueError("new install could not search its first catalog entry")
         if not (home / ".artmark" / "artmark.db").is_file():
             raise ValueError("new install did not create the database in the user's home directory")
-        print(f"{version}: checksum, install, default database, index, and search passed on {target}")
+        print(f"{version}: checksum, install, skill, default database, index, and search passed on {target}")
 
 
 def main() -> None:
