@@ -1,6 +1,6 @@
 ---
 name: artmark
-description: Use the local artmark CLI to remember durable artifacts and find them by description. When the user asks to locate or read a document, design, issue, PR, or similar artifact without an exact locator, search artmark before the provider even if the provider is named. Also apply when the user supplies an artifact, asks to save one, or research surfaces useful durable links.
+description: Use the local artmark CLI to remember durable artifacts and find them by description. When the user asks to locate or read an artifact through available source tools without an exact locator, search artmark before the provider even if the provider is named. Also apply when the user supplies an artifact, asks to save one, or research surfaces useful durable links.
 ---
 
 # artmark
