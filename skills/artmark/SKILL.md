@@ -1,6 +1,6 @@
 ---
 name: artmark
-description: Use the local artmark CLI to remember and find durable artifacts across agent sessions. Apply when the user provides an artifact, asks to save or find one, or refers to one seen earlier.
+description: Use the local artmark CLI to remember durable artifacts and locate ones seen or shared before. Apply when the user supplies an artifact, asks to save one, or research surfaces useful durable links. When locating a previously seen artifact, search artmark before the provider even if the provider is named.
 ---
 
 # artmark
@@ -59,7 +59,9 @@ Do not register temporary or credential-bearing locators such as signed URLs, au
 
 The CLI rejects recognizable URL credentials, authentication parameters, and signed download parameters, including nested and encoded forms. Validation has bounded input and decoding limits; rejected registrations are not saved. Use a stable locator without secrets. Ordinary query parameters remain part of a generic web artifact's identity. This check cannot recognize arbitrary secrets or every provider's custom authentication scheme; see `docs/credential-validation.md` for the policy.
 
-Do not register ordinary artifacts discovered independently through web searches, provider searches, repository exploration, or other agent research. If a discovered artifact appears especially valuable for future work, ask the user before retaining it. Do not interrupt ordinary research to ask about every result.
+Do not register artifacts found through web or provider searches, repository exploration, or other agent research without the user's approval. Durable artifacts linked from a user-supplied artifact also need approval: the user supplied the parent, not every link inside it.
+
+Finish the main task before asking about discovered artifacts. At the end, briefly list task-relevant durable artifacts you read, plus useful durable links found inside a user-supplied artifact, and ask which ones the user wants remembered. Do not list every search result or interrupt ordinary research for each link. If the user approves one, register it; index it if its contents were already read or the user explicitly asks to save it and it can be inspected.
 
 ## Decide when to index
 
@@ -149,9 +151,11 @@ Do not store passwords, access tokens, cookies, API keys, signed URLs, authentic
 
 Avoid transient session context such as "the file we are working on right now." Prefer durable descriptions such as project names, topics, technologies, decisions, and artifact purpose.
 
+When the user or a live source confirms that one artifact supersedes another, keep the artifact's purpose first in `summary` and add one brief sentence naming its direct predecessor or successor, with the related artmark ID when known. If both artifacts are registered, update both cards so a search result for either points to the other. Read each existing card with `artmark get` before reindexing and preserve its unrelated catalog and source metadata; `artmark index` replaces the catalog card. Keep only the direct relationship, revising stale wording as versions change rather than appending a history. A version-like title alone does not prove supersession. Do not invent a special `tags` convention for this relationship.
+
 ## Find artifacts from previous sessions
 
-When the user refers to an artifact they have seen before, or before asking them to resend a previously supplied artifact, search artmark first:
+When the task is to locate an artifact the user has seen, shared, or used before, search artmark before searching the provider, even if the user names that provider. Do the same before asking the user to resend a previously supplied artifact:
 
 ```text
 artmark search <query> --json
@@ -166,6 +170,8 @@ artmark get <id> --json
 ```
 
 If one result clearly matches, use its locator and retrieval hints to retrieve the live artifact through the appropriate provider tool.
+
+If a search card names a related artifact needed for the task, inspect that card with `artmark get` too, then retrieve its live source as needed.
 
 If several results remain genuinely ambiguous, use their catalog cards to narrow the choice and ask the user only if necessary.
 
