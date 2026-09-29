@@ -1,6 +1,6 @@
 ---
 name: artmark
-description: Use the local artmark CLI to find and remember durable sources. When a task requires locating a shared file, message, design, diagram, ticket, PR, or similar source from a description, search artmark before available provider tools even if the provider is named. Also apply when the user supplies a durable locator or asks to save one; quick-register it and index only after inspecting the source. Ask at task end before registering useful sources found during research or linked from a user-supplied source.
+description: Use the local artmark CLI to find and remember durable sources. When a task requires locating a shared file, message, design, diagram, ticket, PR, or similar source from a description, search artmark before available provider tools even if the provider is named. Quick-register user-supplied durable locators without fetching solely for indexing. Index only after inspection when the user asks to save the source or its contents were already read for the task. At task end, ask before registering relevant sources found during research or linked from a user-supplied source.
 ---
 
 # artmark
