@@ -106,7 +106,7 @@ artmark is a local catalog of artifact pointers and retrieval hints. The origina
 
 - When the user provides a durable artifact locator, register it with `artmark add <uri> --json`. Add `--explicit` when the user asks to save or remember it.
 - Index a search card only after inspecting the source. If the user asks to save it but the source cannot be inspected, keep only the quick registration. Do not invent a search card. Keep source facts separate from your summary, and do not copy source content or secrets.
-- When locating an artifact the user has seen, shared, or used before, search artmark with `artmark search <query> --json` before provider search, even if the provider is named. Inspect likely matches with `artmark get <id> --json`, then retrieve current details through the provider.
+- When locating a durable artifact from a description without an exact locator, use `artmark search <query> --json` before provider search, even if the provider is named. Inspect likely matches with `artmark get <id> --json`, then retrieve current details through the provider.
 - At the end of the task, ask which relevant artifacts discovered through research or linked from a user-supplied artifact should be remembered. Register only those the user approves.
 - For a confirmed supersession relationship, keep a brief direct predecessor or successor note in each registered artifact's summary. Do not use special relation tags or accumulate version history.
 

@@ -140,7 +140,7 @@ The agent workflow is:
 1. Register pointers for durable artifacts you provide.
 2. When asked to save one, or when already reading it, resolve the source with an existing tool.
 3. Create a short search card from what it learned and index that card in artmark.
-4. In a later session, search artmark before a provider search when locating an artifact seen before, even if the provider is named. Then retrieve the current source through the provider tool.
+4. When locating an artifact by description, search artmark before a provider search, even if the provider is named. Then retrieve the current source through the provider tool.
 ```
 
 At the end of a task, the agent asks which relevant artifacts discovered through research or linked from something you supplied should be remembered. It does not register those links without your approval. See [AGENTS.md](AGENTS.md) for the full registration policy.

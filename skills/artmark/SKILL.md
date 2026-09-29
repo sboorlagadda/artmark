@@ -1,6 +1,6 @@
 ---
 name: artmark
-description: Use the local artmark CLI to remember durable artifacts and locate ones seen or shared before. Apply when the user supplies an artifact, asks to save one, or research surfaces useful durable links. When locating a previously seen artifact, search artmark before the provider even if the provider is named.
+description: Use the local artmark CLI to remember durable artifacts and find them by description. When the user asks to locate or read a document, design, issue, PR, or similar artifact without an exact locator, search artmark before the provider even if the provider is named. Also apply when the user supplies an artifact, asks to save one, or research surfaces useful durable links.
 ---
 
 # artmark
@@ -153,9 +153,9 @@ Avoid transient session context such as "the file we are working on right now." 
 
 When the user or a live source confirms that one artifact supersedes another, keep the artifact's purpose first in `summary` and add one brief sentence naming its direct predecessor or successor, with the related artmark ID when known. If both artifacts are registered, update both cards so a search result for either points to the other. Read each existing card with `artmark get` before reindexing and preserve its unrelated catalog and source metadata; `artmark index` replaces the catalog card. Keep only the direct relationship, revising stale wording as versions change rather than appending a history. A version-like title alone does not prove supersession. Do not invent a special `tags` convention for this relationship.
 
-## Find artifacts from previous sessions
+## Find artifacts by description
 
-When the task is to locate an artifact the user has seen, shared, or used before, search artmark before searching the provider, even if the user names that provider. Do the same before asking the user to resend a previously supplied artifact:
+When the user asks to locate or read a durable artifact by description, search artmark before searching the provider. This applies whether or not the user says they have seen it before, and even when they name a provider, person, topic, or recent event. If the user supplies the exact locator, register it under the policy above and use that locator directly. Before asking the user to resend a previously supplied artifact, search artmark:
 
 ```text
 artmark search <query> --json
