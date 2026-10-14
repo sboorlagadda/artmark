@@ -1,6 +1,6 @@
 # artmark
 
-**Early / v0.1:** artmark is usable, but the CLI, JSON output, and SQLite schema are not yet stable compatibility contracts.
+**Early / v0.2:** artmark is usable, but the CLI, JSON output, and SQLite schema are not yet stable compatibility contracts.
 
 **A local bookmark manager for your agents.**
 
@@ -175,7 +175,7 @@ The agent's provider tools remain responsible for retrieving current source cont
 
 ## Install
 
-Download the latest prebuilt binary and its matching `.sha256` file from [GitHub Releases](https://github.com/sboorlagadda/artmark/releases/latest). These instructions use the `v0.1.0` filenames; substitute the filenames shown on the latest release if it is newer.
+Download the latest prebuilt binary and its matching `.sha256` file from [GitHub Releases](https://github.com/sboorlagadda/artmark/releases/latest). These instructions use the `v0.2.3` filenames; substitute the filenames shown on the latest release if it is newer.
 
 Starting with `v0.2.1`, each archive contains the executable, the artmark agent skill at `skills/artmark/SKILL.md`, and `LICENSE`.
 
@@ -191,7 +191,7 @@ Pick the archive for your machine:
 From a terminal in the directory containing both downloaded files, use the commands for your system. On Linux x86-64:
 
 ```bash
-archive=artmark-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+archive=artmark-v0.2.3-x86_64-unknown-linux-gnu.tar.gz
 sha256sum -c "$archive.sha256"
 mkdir -p "$HOME/.local/bin"
 tar -xzf "$archive" -C "$HOME/.local/bin" artmark
@@ -199,10 +199,10 @@ export PATH="$HOME/.local/bin:$PATH"
 artmark --version
 ```
 
-On macOS, choose **one** archive name: `artmark-v0.1.0-aarch64-apple-darwin.tar.gz` for Apple Silicon or `artmark-v0.1.0-x86_64-apple-darwin.tar.gz` for Intel. Then run:
+On macOS, choose **one** archive name: `artmark-v0.2.3-aarch64-apple-darwin.tar.gz` for Apple Silicon or `artmark-v0.2.3-x86_64-apple-darwin.tar.gz` for Intel. Then run:
 
 ```bash
-archive=artmark-v0.1.0-aarch64-apple-darwin.tar.gz  # change to Intel filename if needed
+archive=artmark-v0.2.3-aarch64-apple-darwin.tar.gz  # change to Intel filename if needed
 shasum -a 256 -c "$archive.sha256"
 mkdir -p "$HOME/.local/bin"
 tar -xzf "$archive" -C "$HOME/.local/bin" artmark
@@ -217,7 +217,7 @@ Add `$HOME/.local/bin` to your shell's `PATH` configuration if you want `artmark
 On Windows x86-64, in PowerShell from the directory containing the downloads:
 
 ```powershell
-$archive = 'artmark-v0.1.0-x86_64-pc-windows-msvc.zip'
+$archive = 'artmark-v0.2.3-x86_64-pc-windows-msvc.zip'
 $expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
 $actual = (Get-FileHash $archive -Algorithm SHA256).Hash
 if ($actual -ne $expected) { throw 'Checksum mismatch' }
@@ -358,7 +358,7 @@ Search scores are local ranking scores, not probabilities.
 
 ## Status
 
-artmark is an early `v0.1` release. CLI behavior, JSON fields, and the local database schema may change before `1.0`.
+artmark is an early `v0.2` release. CLI behavior, JSON fields, and the local database schema may change before `1.0`.
 
 The CLI and local FTS5 catalog are available now.
 
