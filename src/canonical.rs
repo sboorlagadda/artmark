@@ -333,6 +333,13 @@ fn slack_thread_ts_to_id(ts: &str) -> Option<String> {
     }
 }
 
+fn host_with_port(url: &Url, host: &str) -> String {
+    match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    }
+}
+
 fn identify_jira(host: &str, parts: &[&str], url: &Url, input: &str) -> Option<Identity> {
     let is_atlassian = host.ends_with(".atlassian.net");
     let is_jira_host = is_atlassian || host.starts_with("jira.") || host.contains(".jira.");
@@ -361,8 +368,9 @@ fn identify_jira(host: &str, parts: &[&str], url: &Url, input: &str) -> Option<I
     };
 
     let key = raw_key.and_then(|raw| normalize_issue_key(&raw, 2))?;
+    let instance = host_with_port(url, host);
     Some(known_identity(
-        format!("jira:issue:{host}:{key}"),
+        format!("jira:issue:{instance}:{key}"),
         "jira_issue",
         "jira",
         &key,
@@ -445,8 +453,9 @@ fn identify_confluence(host: &str, parts: &[&str], url: &Url, input: &str) -> Op
     };
 
     let page_id = page_id?;
+    let instance = host_with_port(url, host);
     Some(known_identity(
-        format!("confluence:page:{host}:{page_id}"),
+        format!("confluence:page:{instance}:{page_id}"),
         "confluence_page",
         "confluence",
         &page_id,

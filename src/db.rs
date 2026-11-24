@@ -522,6 +522,33 @@ fn upsert_artifact(
             params![id, now, title, explicitly_saved],
         )?;
         id
+    } else if let Some(alias_owner) = tx
+        .query_row(
+            "SELECT artifact_id FROM aliases WHERE uri=?1",
+            [uri],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        tx.execute(
+            "UPDATE artifacts SET canonical_key=?2, kind=?3, provider=?4,
+             source_external_id=COALESCE(?5, source_external_id),
+             last_seen_at=?6, updated_at=?6,
+             title=COALESCE(title, ?7),
+             is_explicitly_saved=MAX(is_explicitly_saved, ?8)
+             WHERE id=?1",
+            params![
+                alias_owner,
+                identity.canonical_key,
+                identity.kind,
+                identity.provider,
+                identity.external_id,
+                now,
+                title,
+                explicitly_saved
+            ],
+        )?;
+        alias_owner
     } else {
         let id = format!("art_{}", Uuid::now_v7().simple());
         tx.execute(

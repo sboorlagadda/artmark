@@ -250,12 +250,25 @@
       "external_id": "PLAT-77",
       "variants": [
         "https://jira.example.com/browse/PLAT-77",
+        "https://jira.example.com:443/browse/PLAT-77",
         "https://JIRA.example.com/browse/plat-77#activity",
         "https://jira.example.com/secure/RapidBoard.jspa?rapidView=5&selectedIssue=PLAT-77"
       ],
       "rejected_variants": [
         "https://jira.example.com/browse/PLAT-77?api_key=TEST_SECRET"
       ]
+    },
+    {
+      "name": "jira_self_hosted_non_default_port",
+      "canonical_key": "jira:issue:jira.example.com:8443:PLAT-77",
+      "provider": "jira",
+      "kind": "jira_issue",
+      "external_id": "PLAT-77",
+      "variants": [
+        "https://jira.example.com:8443/browse/PLAT-77",
+        "https://JIRA.example.com:8443/browse/plat-77#activity"
+      ],
+      "rejected_variants": []
     },
     {
       "name": "jira_context_path_issue",
@@ -310,7 +323,20 @@
       "external_id": "987654321",
       "variants": [
         "https://confluence.example.com/spaces/ENG/pages/987654321/Incident-Runbook",
+        "https://confluence.example.com:443/pages/viewpage.action?pageId=987654321",
         "https://confluence.example.com/pages/viewpage.action?pageId=987654321"
+      ],
+      "rejected_variants": []
+    },
+    {
+      "name": "confluence_self_hosted_non_default_port",
+      "canonical_key": "confluence:page:confluence.example.com:8443:987654321",
+      "provider": "confluence",
+      "kind": "confluence_page",
+      "external_id": "987654321",
+      "variants": [
+        "https://confluence.example.com:8443/spaces/ENG/pages/987654321/Incident-Runbook",
+        "https://confluence.example.com:8443/pages/viewpage.action?pageId=987654321"
       ],
       "rejected_variants": []
     },
@@ -407,6 +433,13 @@
       "external_id": "ENG-123"
     },
     {
+      "name": "jira_other_non_default_port_same_key",
+      "uri": "https://jira.example.com:9443/browse/PLAT-77",
+      "provider": "jira",
+      "kind": "jira_issue",
+      "external_id": "PLAT-77"
+    },
+    {
       "name": "jira_board_without_selected_issue",
       "uri": "https://acme.atlassian.net/jira/software/c/projects/ENG/boards/4/backlog",
       "provider": "web",
@@ -440,6 +473,13 @@
       "provider": "confluence",
       "kind": "confluence_page",
       "external_id": "123456789"
+    },
+    {
+      "name": "confluence_other_non_default_port_same_page_id",
+      "uri": "https://confluence.example.com:9443/pages/viewpage.action?pageId=987654321",
+      "provider": "confluence",
+      "kind": "confluence_page",
+      "external_id": "987654321"
     },
     {
       "name": "confluence_short_link_not_guessed",
