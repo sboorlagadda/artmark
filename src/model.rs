@@ -21,6 +21,8 @@ pub struct Artifact {
     pub catalog_metadata: Option<Value>,
     pub provenance: Option<Value>,
     pub is_explicitly_saved: bool,
+    pub access_count: i64,
+    pub last_accessed_at: Option<String>,
     pub topics: Vec<String>,
     pub entities: Vec<String>,
     pub tags: Vec<String>,

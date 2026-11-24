@@ -1,4 +1,5 @@
 use crate::canonical::{Identity, identify};
+use crate::migrations::{self, CURRENT_SCHEMA_VERSION};
 use crate::model::{Artifact, IndexInput, SearchCard, SearchFilters};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
@@ -8,6 +9,19 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
+
+const FTS_BM25_WEIGHTS: &str = "bm25(artifact_fts, 0.0, 8.0, 3.0, 1.5, 2.5, 2.5, 1.5)";
+
+const STOPWORDS: &[&str] = &[
+    "a", "about", "after", "am", "an", "and", "any", "are", "as", "at", "be", "been", "before",
+    "being", "between", "but", "by", "can", "could", "did", "do", "does", "during", "find", "for",
+    "from", "get", "had", "has", "have", "her", "here", "his", "how", "i", "in", "into", "is",
+    "it", "its", "look", "looking", "may", "me", "might", "must", "my", "nor", "of", "off", "on",
+    "onto", "open", "or", "our", "out", "over", "please", "search", "shall", "should", "show",
+    "so", "some", "than", "that", "the", "their", "them", "there", "these", "they", "this",
+    "those", "through", "to", "under", "up", "us", "was", "we", "were", "what", "when", "where",
+    "which", "who", "whom", "whose", "why", "will", "with", "would", "yet", "you", "your",
+];
 
 pub struct Registry {
     conn: Connection,
@@ -27,7 +41,7 @@ impl Registry {
                 fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
             }
         }
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -36,66 +50,7 @@ impl Registry {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
         )?;
-        let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 1 {
-            bail!("database schema version {version} is newer than this artmark build");
-        }
-        if version == 0 {
-            conn.execute_batch(
-                "BEGIN;
-                 CREATE TABLE artifacts (
-                   id TEXT PRIMARY KEY,
-                   canonical_key TEXT NOT NULL UNIQUE,
-                   kind TEXT NOT NULL,
-                   provider TEXT,
-                   state TEXT NOT NULL CHECK(state IN ('registered','indexed','unreachable')),
-                   primary_uri TEXT,
-                   title TEXT,
-                   summary TEXT,
-                   search_text TEXT,
-                   source_external_id TEXT,
-                   source_revision TEXT,
-                   source_updated_at TEXT,
-                   retrieval_json TEXT,
-                   source_metadata_json TEXT,
-                   catalog_metadata_json TEXT,
-                   provenance_json TEXT,
-                   is_explicitly_saved INTEGER NOT NULL DEFAULT 0,
-                   created_at TEXT NOT NULL,
-                   updated_at TEXT NOT NULL,
-                   last_seen_at TEXT NOT NULL,
-                   last_indexed_at TEXT
-                 );
-                 CREATE TABLE aliases (
-                   uri TEXT PRIMARY KEY,
-                   artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
-                   first_seen_at TEXT NOT NULL,
-                   last_seen_at TEXT NOT NULL
-                 );
-                 CREATE TABLE topics (
-                   artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
-                   topic TEXT NOT NULL,
-                   PRIMARY KEY(artifact_id, topic)
-                 );
-                 CREATE TABLE entities (
-                   artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
-                   entity TEXT NOT NULL,
-                   PRIMARY KEY(artifact_id, entity)
-                 );
-                 CREATE TABLE tags (
-                   artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
-                   tag TEXT NOT NULL,
-                   PRIMARY KEY(artifact_id, tag)
-                 );
-                 CREATE VIRTUAL TABLE artifact_fts USING fts5(
-                   artifact_id UNINDEXED, title, summary, search_text, topics, entities, tags
-                 );
-                 CREATE INDEX aliases_artifact_id ON aliases(artifact_id);
-                 CREATE INDEX artifacts_recent ON artifacts(last_seen_at DESC);
-                 PRAGMA user_version=1;
-                 COMMIT;",
-            )?;
-        }
+        migrations::migrate(&mut conn, path)?;
         Ok(Self { conn })
     }
 
@@ -136,6 +91,25 @@ impl Registry {
         let Some(id) = self.resolve_id(key)? else {
             return Ok(None);
         };
+        load_artifact(&self.conn, &id).map(Some)
+    }
+
+    pub fn get_tracked(&mut self, key: &str, track: bool) -> Result<Option<Artifact>> {
+        let Some(id) = self.resolve_id(key)? else {
+            return Ok(None);
+        };
+        if track {
+            let now = timestamp();
+            let tx = self.conn.transaction()?;
+            tx.execute(
+                "UPDATE artifacts
+                 SET access_count = access_count + 1,
+                     last_accessed_at = ?2
+                 WHERE id = ?1",
+                params![id, now],
+            )?;
+            tx.commit()?;
+        }
         load_artifact(&self.conn, &id).map(Some)
     }
 
@@ -197,13 +171,21 @@ impl Registry {
         }
         let mut results = Vec::new();
         let mut seen = HashSet::new();
+        let mut exact_locator_match = false;
         if let Some(artifact) = self.get(query)? {
             push_card(&mut results, &mut seen, artifact, 1.0, filters);
+            exact_locator_match = is_locator_or_key(query);
         } else if let Ok(identity) = identify(query)
             && let Some(artifact) = self.get(&identity.canonical_key)?
         {
             push_card(&mut results, &mut seen, artifact, 1.0, filters);
+            exact_locator_match = is_locator_or_key(query);
         }
+        if exact_locator_match {
+            results.truncate(limit);
+            return Ok(results);
+        }
+
         let mut exact = self.conn.prepare(
             "SELECT id FROM artifacts WHERE title=?1 COLLATE NOCASE OR source_external_id=?1 ORDER BY id LIMIT 100",
         )?;
@@ -216,29 +198,49 @@ impl Registry {
             }
         }
 
-        let fts_query = lexical_query(query);
-        if !fts_query.is_empty() {
-            let mut stmt = self.conn.prepare(
-                "SELECT artifact_id FROM artifact_fts WHERE artifact_fts MATCH ?1
-                 ORDER BY bm25(artifact_fts, 0, 8, 3, 1, 2, 2, 1) LIMIT 500",
-            )?;
-            let ids = stmt
-                .query_map([fts_query], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            for (rank, id) in ids.into_iter().enumerate() {
-                if let Some(artifact) = self.get(&id)? {
-                    push_card(
-                        &mut results,
-                        &mut seen,
-                        artifact,
-                        0.7 / (rank as f64 + 1.0),
-                        filters,
-                    );
-                }
+        let terms = query_terms(query);
+        if !terms.is_empty() && results.len() < limit {
+            let and_query = fts_match_query(&terms, " AND ");
+            self.run_fts_pass(&and_query, 0.55, 0.35, filters, &mut seen, &mut results)?;
+
+            if terms.len() > 1 && results.len() < limit {
+                let or_query = fts_match_query(&terms, " OR ");
+                self.run_fts_pass(&or_query, 0.05, 0.45, filters, &mut seen, &mut results)?;
             }
         }
         results.truncate(limit);
         Ok(results)
+    }
+
+    fn run_fts_pass(
+        &self,
+        fts_query: &str,
+        score_floor: f64,
+        score_span: f64,
+        filters: &SearchFilters<'_>,
+        seen: &mut HashSet<String>,
+        results: &mut Vec<SearchCard>,
+    ) -> Result<()> {
+        let sql = format!(
+            "SELECT artifact_id, {FTS_BM25_WEIGHTS} AS rank
+             FROM artifact_fts
+             WHERE artifact_fts MATCH ?1
+             ORDER BY rank ASC, artifact_id ASC
+             LIMIT 500"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map([fts_query], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (id, bm25_raw) in rows {
+            if let Some(artifact) = self.get(&id)? {
+                let score = bm25_to_score(bm25_raw, score_floor, score_span);
+                push_card(results, seen, artifact, score, filters);
+            }
+        }
+        Ok(())
     }
 
     pub fn reindex(&mut self) -> Result<usize> {
@@ -260,6 +262,16 @@ impl Registry {
         let integrity: String = self
             .conn
             .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        let schema_version: i64 = self
+            .conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let foreign_key_integrity = self
+            .conn
+            .query_row("PRAGMA foreign_key_check", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?
+            .is_none();
         let fts_integrity = self
             .conn
             .execute(
@@ -284,6 +296,8 @@ impl Registry {
             [], |row| row.get(0),
         )?;
         let healthy = integrity == "ok"
+            && schema_version == CURRENT_SCHEMA_VERSION
+            && foreign_key_integrity
             && fts_integrity
             && fts_rows == artifacts
             && missing_fts == 0
@@ -291,8 +305,9 @@ impl Registry {
         Ok(json!({
             "healthy": healthy,
             "sqlite_integrity": integrity,
+            "foreign_key_integrity": foreign_key_integrity,
             "fts_integrity": fts_integrity,
-            "schema_version": 1,
+            "schema_version": schema_version,
             "artifacts": artifacts,
             "fts_rows": fts_rows,
             "missing_fts": missing_fts,
@@ -324,9 +339,44 @@ impl Registry {
             let (name, count) = row?;
             providers.insert(name, json!(count));
         }
-        Ok(
-            json!({"artifacts": total, "states": states, "providers": providers, "semantic_search": false}),
-        )
+        let total_accesses: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(access_count), 0) FROM artifacts",
+            [],
+            |row| row.get(0),
+        )?;
+        let accessed_artifacts: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM artifacts WHERE access_count > 0",
+            [],
+            |row| row.get(0),
+        )?;
+        let mut top_stmt = self.conn.prepare(
+            "SELECT id, title, canonical_key, provider, access_count, last_accessed_at
+             FROM artifacts
+             WHERE access_count > 0
+             ORDER BY access_count DESC, last_accessed_at DESC, id ASC
+             LIMIT 5",
+        )?;
+        let top_accessed: Vec<Value> = top_stmt
+            .query_map([], |row| {
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?,
+                    "title": row.get::<_, Option<String>>(1)?,
+                    "canonical_key": row.get::<_, String>(2)?,
+                    "provider": row.get::<_, Option<String>>(3)?,
+                    "access_count": row.get::<_, i64>(4)?,
+                    "last_accessed_at": row.get::<_, Option<String>>(5)?,
+                }))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(json!({
+            "artifacts": total,
+            "states": states,
+            "providers": providers,
+            "total_accesses": total_accesses,
+            "accessed_artifacts": accessed_artifacts,
+            "top_accessed": top_accessed,
+            "semantic_search": false
+        }))
     }
 
     fn resolve_id(&self, key: &str) -> Result<Option<String>> {
@@ -401,14 +451,16 @@ fn artifact_row(row: &Row<'_>) -> rusqlite::Result<Artifact> {
         catalog_metadata: parse_json(row.get(14)?),
         provenance: parse_json(row.get(15)?),
         is_explicitly_saved: row.get(16)?,
+        access_count: row.get(17)?,
+        last_accessed_at: row.get(18)?,
         topics: Vec::new(),
         entities: Vec::new(),
         tags: Vec::new(),
         aliases: Vec::new(),
-        created_at: row.get(17)?,
-        updated_at: row.get(18)?,
-        last_seen_at: row.get(19)?,
-        last_indexed_at: row.get(20)?,
+        created_at: row.get(19)?,
+        updated_at: row.get(20)?,
+        last_seen_at: row.get(21)?,
+        last_indexed_at: row.get(22)?,
     })
 }
 
@@ -417,7 +469,8 @@ fn load_artifact(conn: &Connection, id: &str) -> Result<Artifact> {
         "SELECT id, canonical_key, kind, provider, state, primary_uri, title, summary,
                 search_text, source_external_id, source_revision, source_updated_at,
                 retrieval_json, source_metadata_json, catalog_metadata_json, provenance_json,
-                is_explicitly_saved, created_at, updated_at, last_seen_at, last_indexed_at
+                is_explicitly_saved, access_count, last_accessed_at,
+                created_at, updated_at, last_seen_at, last_indexed_at
          FROM artifacts WHERE id=?1",
         [id],
         artifact_row,
@@ -620,13 +673,88 @@ fn push_card(
     }
 }
 
-fn lexical_query(query: &str) -> String {
-    query
+fn is_locator_or_key(query: &str) -> bool {
+    let lower = query.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("file://")
+        || query.starts_with("art_")
+        || [
+            "gdrive:", "figma:", "github:", "notion:", "slack:", "web:", "file:",
+        ]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+        || is_filesystem_path_locator(query)
+}
+
+fn is_filesystem_path_locator(query: &str) -> bool {
+    if query.starts_with('/')
+        || query.starts_with('\\')
+        || query.starts_with("./")
+        || query.starts_with("../")
+        || query.starts_with(".\\")
+        || query.starts_with("..\\")
+        || query.starts_with("~/")
+        || query.starts_with("~\\")
+    {
+        return true;
+    }
+    let bytes = query.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return true;
+    }
+    !query.chars().any(char::is_whitespace) && (query.contains('/') || query.contains('\\'))
+}
+
+fn query_terms(query: &str) -> Vec<String> {
+    let mut raw = Vec::new();
+    let mut seen_raw = HashSet::new();
+    for word in query
         .split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
-        .map(|word| format!("\"{word}\"*"))
+    {
+        let lowered = word.to_lowercase();
+        if seen_raw.insert(lowered.clone()) {
+            raw.push(lowered);
+        }
+    }
+    let filtered: Vec<String> = raw
+        .iter()
+        .filter(|word| !is_stopword(word))
+        .cloned()
+        .collect();
+    if filtered.is_empty() { raw } else { filtered }
+}
+
+fn is_stopword(word: &str) -> bool {
+    STOPWORDS.binary_search(&word).is_ok()
+}
+
+fn fts_match_query(terms: &[String], operator: &str) -> String {
+    terms
+        .iter()
+        .map(|word| {
+            if word.chars().count() >= 3 {
+                format!("(\"{word}\" OR \"{word}\"*)")
+            } else {
+                format!("\"{word}\"")
+            }
+        })
         .collect::<Vec<_>>()
-        .join(" OR ")
+        .join(operator)
+}
+
+fn bm25_to_score(bm25_raw: f64, floor: f64, span: f64) -> f64 {
+    let relevance = if bm25_raw.is_finite() {
+        (-bm25_raw).max(0.0)
+    } else {
+        0.0
+    };
+    floor + span * (relevance / (relevance + 5.0))
 }
 
 #[cfg(test)]
@@ -963,6 +1091,228 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(db.doctor().unwrap()["healthy"], true);
+        drop(db);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn stopwords_list_is_strictly_sorted() {
+        assert!(STOPWORDS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn fts_supports_porter_stemming_stopwords_and_first_bm25_and_operator_words() {
+        let path = test_path();
+        let mut db = Registry::open(&path).unwrap();
+        let filters = SearchFilters::default();
+
+        let webhook_rfc = db
+            .add_and_index(
+                "https://docs.google.com/document/d/WH_RFC/edit",
+                None,
+                true,
+                catalog(
+                    "Webhook Retries RFC",
+                    "Design for outbound webhook retries exponential backoff jitter and dead letter queues",
+                ),
+            )
+            .unwrap();
+        let webhook_note = db
+            .add_and_index(
+                "https://docs.google.com/document/d/WH_NOTE/edit",
+                None,
+                true,
+                catalog(
+                    "Partner Integration Notes",
+                    "Mentions webhooks once without delivery details",
+                ),
+            )
+            .unwrap();
+        let cert_doc = db
+            .add_and_index(
+                "https://docs.google.com/document/d/CERT_DOC/edit",
+                None,
+                true,
+                catalog(
+                    "TLS Certificate Rotation Postmortem",
+                    "Root cause for certificate rotation outage near midnight",
+                ),
+            )
+            .unwrap();
+
+        // Porter stemming matches "retry" -> "retries" and "rotating certificates" -> "rotation certificate".
+        let retry_hits = db
+            .search("where is the retry backoff", 10, &filters)
+            .unwrap();
+        assert_eq!(retry_hits.len(), 1);
+        assert_eq!(retry_hits[0].id, webhook_rfc.id);
+        assert!(retry_hits[0].score > 0.55 && retry_hits[0].score < 0.90);
+
+        let cert_hits = db.search("rotating certificates", 10, &filters).unwrap();
+        assert_eq!(cert_hits.len(), 1);
+        assert_eq!(cert_hits[0].id, cert_doc.id);
+
+        // AND match ranks strictly above OR fallback match with clear score separation.
+        let tiered = db.search("webhook backoff", 10, &filters).unwrap();
+        assert_eq!(tiered.len(), 2);
+        assert_eq!(tiered[0].id, webhook_rfc.id);
+        assert_eq!(tiered[1].id, webhook_note.id);
+        assert!(tiered[0].score > 0.55);
+        assert!(tiered[1].score < 0.50);
+
+        // Reserved FTS5 operator tokens and punctuation-only queries never error.
+        let operator_hits = db.search("NOT NEAR AND OR midnight", 10, &filters).unwrap();
+        assert_eq!(operator_hits[0].id, cert_doc.id);
+        assert!(db.search("--- ???", 10, &filters).unwrap().is_empty());
+
+        // Stopword-only query falls back to raw terms instead of silently producing an empty match expression.
+        let stopword_only = db.search("for and", 10, &filters).unwrap();
+        assert!(!stopword_only.is_empty());
+
+        drop(db);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn lookup_tracking_counts_explicit_gets_only_and_surfaces_in_stats() {
+        let path = test_path();
+        let mut db = Registry::open(&path).unwrap();
+        let filters = SearchFilters::default();
+
+        let first = db
+            .add_and_index(
+                "https://docs.google.com/document/d/TRACK1/edit",
+                None,
+                true,
+                catalog("First Anchor Doc", "webhook retries architecture"),
+            )
+            .unwrap();
+        let second = db
+            .add_and_index(
+                "https://docs.google.com/document/d/TRACK2/edit",
+                None,
+                true,
+                catalog("Second Anchor Doc", "saml federation architecture"),
+            )
+            .unwrap();
+        let third = db
+            .add(
+                "https://github.com/org/repo/issues/7",
+                Some("Issue 7"),
+                true,
+            )
+            .unwrap();
+
+        // Internal reads, search, recent, index, reindex, stats, doctor, and --no-track do not increment.
+        assert_eq!(first.access_count, 0);
+        assert_eq!(first.last_accessed_at, None);
+        assert!(!db.search("architecture", 10, &filters).unwrap().is_empty());
+        assert_eq!(db.recent(10, None, None).unwrap().len(), 3);
+        assert_eq!(db.reindex().unwrap(), 3);
+        assert_eq!(db.doctor().unwrap()["healthy"], true);
+        let no_track = db.get_tracked(&first.id, false).unwrap().unwrap();
+        assert_eq!(no_track.access_count, 0);
+        assert_eq!(no_track.last_accessed_at, None);
+
+        let initial_stats = db.stats().unwrap();
+        assert_eq!(initial_stats["total_accesses"], 0);
+        assert_eq!(initial_stats["accessed_artifacts"], 0);
+        assert_eq!(initial_stats["top_accessed"].as_array().unwrap().len(), 0);
+
+        // Explicit tracked gets increment access_count and set last_accessed_at without mutating updated_at/last_seen_at.
+        let updated_before = first.updated_at.clone();
+        let seen_before = first.last_seen_at.clone();
+        let g1 = db.get_tracked(&first.id, true).unwrap().unwrap();
+        assert_eq!(g1.access_count, 1);
+        assert!(g1.last_accessed_at.is_some());
+        assert_eq!(g1.updated_at, updated_before);
+        assert_eq!(g1.last_seen_at, seen_before);
+
+        // Lookup by canonical key or alias URL also increments the same artifact.
+        let g2 = db
+            .get_tracked("https://docs.google.com/document/d/TRACK1/view", true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(g2.id, first.id);
+        assert_eq!(g2.access_count, 2);
+
+        let s1 = db.get_tracked(&second.id, true).unwrap().unwrap();
+        assert_eq!(s1.access_count, 1);
+
+        // Untouched artifact remains at 0 and is omitted from top_accessed.
+        assert_eq!(db.get(&third.id).unwrap().unwrap().access_count, 0);
+
+        let stats = db.stats().unwrap();
+        assert_eq!(stats["total_accesses"], 3);
+        assert_eq!(stats["accessed_artifacts"], 2);
+        let top = stats["top_accessed"].as_array().unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0]["id"], first.id);
+        assert_eq!(top[0]["access_count"], 2);
+        assert_eq!(top[1]["id"], second.id);
+        assert_eq!(top[1]["access_count"], 1);
+
+        // Forgetting removes the artifact from usage stats cleanly.
+        assert!(db.forget(&first.id).unwrap());
+        let after_forget = db.stats().unwrap();
+        assert_eq!(after_forget["total_accesses"], 1);
+        assert_eq!(after_forget["accessed_artifacts"], 1);
+        assert_eq!(after_forget["top_accessed"][0]["id"], second.id);
+
+        drop(db);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn local_filesystem_path_search_short_circuits_without_unrelated_fts_hits() {
+        let path = test_path();
+        let mut db = Registry::open(&path).unwrap();
+        let filters = SearchFilters::default();
+
+        let local = db
+            .add_and_index(
+                "/workspace/ops/canary-deployment-runbook.md",
+                None,
+                true,
+                catalog(
+                    "Canary Deployment Runbook",
+                    "Local markdown runbook for progressive canary deployments",
+                ),
+            )
+            .unwrap();
+        let _unrelated = db
+            .add_and_index(
+                "https://www.notion.so/Backup-Runbook-0123456789abcdef0123456789abcdef",
+                None,
+                true,
+                catalog(
+                    "Postgres Backup Runbook",
+                    "Operational runbook for point-in-time recovery and light/dark dashboard theme",
+                ),
+            )
+            .unwrap();
+
+        let exact_path = db
+            .search("/workspace/ops/canary-deployment-runbook.md", 10, &filters)
+            .unwrap();
+        assert_eq!(exact_path.len(), 1);
+        assert_eq!(exact_path[0].id, local.id);
+        assert_eq!(exact_path[0].score, 1.0);
+
+        // Prose containing a slash and whitespace must still run lexical FTS search.
+        let prose = db.search("light/dark theme", 10, &filters).unwrap();
+        assert_eq!(prose.len(), 1);
+        assert_ne!(prose[0].id, local.id);
+
+        assert!(is_filesystem_path_locator("/tmp/file.md"));
+        assert!(is_filesystem_path_locator("./docs/design.md"));
+        assert!(is_filesystem_path_locator("../README.md"));
+        assert!(is_filesystem_path_locator("docs/design.md"));
+        assert!(is_filesystem_path_locator(r"C:\Users\dev\notes.md"));
+        assert!(is_filesystem_path_locator(r"\\server\share\notes.md"));
+        assert!(!is_filesystem_path_locator("roadmap"));
+        assert!(!is_filesystem_path_locator("light/dark theme"));
+
         drop(db);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }

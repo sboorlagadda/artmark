@@ -668,3 +668,302 @@ fn recent_filters_by_state_and_provider() {
 
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn cli_upgrades_v1_database_creates_backup_and_refuses_newer_schema() {
+    let dir = std::env::temp_dir().join(format!("artmark-v1-upgrade-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA foreign_keys=ON;
+             CREATE TABLE artifacts (
+               id TEXT PRIMARY KEY,
+               canonical_key TEXT NOT NULL UNIQUE,
+               kind TEXT NOT NULL,
+               provider TEXT,
+               state TEXT NOT NULL CHECK(state IN ('registered','indexed','unreachable')),
+               primary_uri TEXT,
+               title TEXT,
+               summary TEXT,
+               search_text TEXT,
+               source_external_id TEXT,
+               source_revision TEXT,
+               source_updated_at TEXT,
+               retrieval_json TEXT,
+               source_metadata_json TEXT,
+               catalog_metadata_json TEXT,
+               provenance_json TEXT,
+               is_explicitly_saved INTEGER NOT NULL DEFAULT 0,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               last_seen_at TEXT NOT NULL,
+               last_indexed_at TEXT
+             );
+             CREATE TABLE aliases (
+               uri TEXT PRIMARY KEY,
+               artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+               first_seen_at TEXT NOT NULL,
+               last_seen_at TEXT NOT NULL
+             );
+             CREATE TABLE topics (
+               artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+               topic TEXT NOT NULL,
+               PRIMARY KEY(artifact_id, topic)
+             );
+             CREATE TABLE entities (
+               artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+               entity TEXT NOT NULL,
+               PRIMARY KEY(artifact_id, entity)
+             );
+             CREATE TABLE tags (
+               artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+               tag TEXT NOT NULL,
+               PRIMARY KEY(artifact_id, tag)
+             );
+             CREATE VIRTUAL TABLE artifact_fts USING fts5(
+               artifact_id UNINDEXED, title, summary, search_text, topics, entities, tags
+             );
+             CREATE INDEX aliases_artifact_id ON aliases(artifact_id);
+             CREATE INDEX artifacts_recent ON artifacts(last_seen_at DESC);
+             INSERT INTO artifacts (
+               id, canonical_key, kind, provider, state, primary_uri, title, summary, search_text,
+               source_external_id, is_explicitly_saved, created_at, updated_at, last_seen_at, last_indexed_at
+             ) VALUES (
+               'art_legacy_1',
+               'gdrive:doc:MIGRATE1',
+               'google_doc',
+               'google_drive',
+               'indexed',
+               'https://docs.google.com/document/d/MIGRATE1/edit',
+               'Enterprise Identity Migration',
+               'Plan for identity migration and webhook retries',
+               'SAML migration identity provisioning webhook retries',
+               'MIGRATE1',
+               1,
+               '2026-06-01T00:00:00.000Z',
+               '2026-06-01T00:00:00.000Z',
+               '2026-06-01T00:00:00.000Z',
+               '2026-06-01T00:00:00.000Z'
+             );
+             INSERT INTO aliases VALUES ('https://docs.google.com/document/d/MIGRATE1/edit', 'art_legacy_1', '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z');
+             INSERT INTO topics VALUES ('art_legacy_1', 'SAML');
+             INSERT INTO artifact_fts VALUES (
+               'art_legacy_1',
+               'Enterprise Identity Migration',
+               'Plan for identity migration and webhook retries',
+               'SAML migration identity provisioning webhook retries',
+               'SAML', '', ''
+             );
+             PRAGMA user_version=1;",
+        )
+        .unwrap();
+    }
+
+    let (code, doctor) = run(&db, &["doctor"], None);
+    assert_eq!(code, 0);
+    assert_eq!(doctor["healthy"], true);
+    assert_eq!(doctor["schema_version"], 2);
+    assert_eq!(doctor["foreign_key_integrity"], true);
+    assert_eq!(doctor["fts_integrity"], true);
+
+    let backup = dir.join("artmark.db.v1.bak");
+    assert!(backup.is_file(), "expected pre-migration backup {backup:?}");
+
+    let (code, found) = run(&db, &["search", "migrating identities"], None);
+    assert_eq!(code, 0);
+    assert_eq!(found["results"].as_array().unwrap().len(), 1);
+    assert_eq!(found["results"][0]["id"], "art_legacy_1");
+
+    let (code, item) = run(&db, &["get", "art_legacy_1", "--no-track"], None);
+    assert_eq!(code, 0);
+    assert_eq!(item["access_count"], 0);
+    assert!(item["last_accessed_at"].is_null());
+
+    // Refuse opening a database from a newer unsupported schema version.
+    let future_db = dir.join("future.db");
+    {
+        let conn = Connection::open(&future_db).unwrap();
+        conn.pragma_update(None, "user_version", 99).unwrap();
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+        .args(["--database", future_db.to_str().unwrap(), "stats", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("newer than this artmark build"));
+    assert!(!dir.join("future.db.v99.bak").exists());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_tracks_get_lookups_honors_no_track_and_reports_usage_in_stats() {
+    let dir = std::env::temp_dir().join(format!("artmark-lookup-stats-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+
+    let (_, first) = run(
+        &db,
+        &[
+            "add",
+            "https://docs.google.com/document/d/USAGE1/edit",
+            "--explicit",
+            "--json-input",
+            "-",
+        ],
+        Some(
+            r#"{"source_metadata":{"title":"Anchor Spec"},"catalog":{"summary":"Anchor spec","search_text":"anchor spec webhook retries"}}"#,
+        ),
+    );
+    let (_, second) = run(
+        &db,
+        &[
+            "add",
+            "https://github.com/org/repo/issues/12",
+            "--explicit",
+            "--json-input",
+            "-",
+        ],
+        Some(
+            r#"{"source_metadata":{"title":"Retry Bug"},"catalog":{"summary":"Bug","search_text":"webhook retries storm"}}"#,
+        ),
+    );
+    let id1 = first["id"].as_str().unwrap();
+    let id2 = second["id"].as_str().unwrap();
+
+    // Search, recent, and --no-track do not increment access counts.
+    let _ = run(&db, &["search", "webhook retries"], None);
+    let _ = run(&db, &["recent"], None);
+    let (_, peek) = run(&db, &["get", id1, "--no-track"], None);
+    assert_eq!(peek["access_count"], 0);
+    assert!(peek["last_accessed_at"].is_null());
+
+    // Tracked gets increment access_count and populate last_accessed_at.
+    let (_, g1) = run(&db, &["get", id1], None);
+    assert_eq!(g1["access_count"], 1);
+    assert!(g1["last_accessed_at"].is_string());
+    let (_, g2) = run(
+        &db,
+        &["get", "https://docs.google.com/document/d/USAGE1/view"],
+        None,
+    );
+    assert_eq!(g2["access_count"], 2);
+    let (_, g3) = run(&db, &["get", id2], None);
+    assert_eq!(g3["access_count"], 1);
+
+    // Stats surfaces local usage summaries.
+    let (code, stats) = run(&db, &["stats"], None);
+    assert_eq!(code, 0);
+    assert_eq!(stats["total_accesses"], 3);
+    assert_eq!(stats["accessed_artifacts"], 2);
+    let top = stats["top_accessed"].as_array().unwrap();
+    assert_eq!(top.len(), 2);
+    assert_eq!(top[0]["id"], id1);
+    assert_eq!(top[0]["access_count"], 2);
+    assert_eq!(top[1]["id"], id2);
+    assert_eq!(top[1]["access_count"], 1);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn search_evaluation_corpus_achieves_target_retrieval_quality() {
+    let dir = std::env::temp_dir().join(format!("artmark-search-eval-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+
+    let corpus_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search_eval.json");
+    let corpus: Value = serde_json::from_str(&fs::read_to_string(corpus_path).unwrap()).unwrap();
+
+    let mut id_to_label = std::collections::HashMap::new();
+    for artifact in corpus["artifacts"].as_array().unwrap() {
+        let label = artifact["label"].as_str().unwrap().to_owned();
+        let uri = artifact["uri"].as_str().unwrap();
+        let mut args = vec!["add", uri];
+        if artifact["explicit"].as_bool() == Some(true) {
+            args.push("--explicit");
+        }
+        if let Some(title) = artifact["title"].as_str() {
+            args.push("--title");
+            args.push(title);
+        }
+        let card_str;
+        let stdin = if artifact["card"].is_null() {
+            None
+        } else {
+            args.push("--json-input");
+            args.push("-");
+            card_str = serde_json::to_string(&artifact["card"]).unwrap();
+            Some(card_str.as_str())
+        };
+        let (code, created) = run(&db, &args, stdin);
+        assert_eq!(code, 0, "failed to add {label}");
+        id_to_label.insert(created["id"].as_str().unwrap().to_owned(), label);
+
+        if let Some(aliases) = artifact.get("aliases").and_then(Value::as_array) {
+            for alias in aliases {
+                let (alias_code, _) = run(&db, &["add", alias.as_str().unwrap()], None);
+                assert_eq!(alias_code, 0);
+            }
+        }
+    }
+
+    let mut evaluated = 0usize;
+    let mut hit_at_1 = 0usize;
+    for case in corpus["queries"].as_array().unwrap() {
+        let qid = case["id"].as_str().unwrap();
+        let query = case["query"].as_str().unwrap();
+        let expected = case["expected_top1"].as_str().unwrap();
+        let is_boundary = case
+            .get("expected_lexical_miss")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+        let mut args = vec![
+            "search".to_owned(),
+            query.to_owned(),
+            "--limit".to_owned(),
+            "5".to_owned(),
+        ];
+        if let Some(filters) = case.get("filters").and_then(Value::as_object) {
+            for (key, value) in filters {
+                args.push(format!("--{}", key.replace('_', "-")));
+                args.push(value.as_str().unwrap().to_owned());
+            }
+        }
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (code, response) = run(&db, &arg_refs, None);
+        assert_eq!(code, 0, "query failed: {qid}");
+        let results = response["results"].as_array().unwrap();
+        let returned: Vec<&str> = results
+            .iter()
+            .map(|row| id_to_label[row["id"].as_str().unwrap()].as_str())
+            .collect();
+
+        if is_boundary {
+            assert!(
+                returned.first().copied() != Some(expected),
+                "expected lexical boundary miss for {qid}, got {returned:?}"
+            );
+            continue;
+        }
+
+        evaluated += 1;
+        assert_eq!(
+            returned.first().copied(),
+            Some(expected),
+            "query {qid} ({query:?}) expected top1={expected}, got {returned:?}"
+        );
+        hit_at_1 += 1;
+    }
+
+    assert_eq!(evaluated, 28);
+    assert_eq!(hit_at_1, 28);
+
+    fs::remove_dir_all(dir).unwrap();
+}

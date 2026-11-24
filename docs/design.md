@@ -13,7 +13,13 @@ user asks to save or approves at task end → agent reads source with its tools
 later question → artmark search → matching pointer → agent retrieves live source
 ```
 
-The SQLite database is durable. Its FTS5 index is derived from catalog rows and can be rebuilt with `artmark reindex`. Search works offline and does not require embeddings. Optional semantic indexing can be considered after lexical retrieval has been exercised with real artifacts.
+The SQLite database is durable. Its FTS5 index (`tokenize = 'porter unicode61'`) is derived from catalog rows and can be rebuilt with `artmark reindex`. Search works offline and does not require embeddings. Optional semantic indexing can be considered only if real usage shows recall failures beyond the lexical evaluation in [search-evaluation.md](search-evaluation.md).
+
+## Schema migrations and local usage tracking
+
+Database schema changes are versioned with SQLite `PRAGMA user_version` and applied in order inside immediate transactions that verify foreign keys and FTS5 integrity before committing. Before upgrading an existing on-disk database to a newer schema version, artmark creates a consistent standalone backup beside the database (`<db>.v<N>.bak`, using SQLite `VACUUM INTO` so WAL changes are included) and refuses to open databases from a newer unsupported schema version. If a migration fails, the transaction rolls back automatically and the pre-migration backup remains available for manual recovery.
+
+To help users see whether saved artifacts are actually rediscovered across sessions, `artmark get` increments local `access_count` and updates `last_accessed_at` in SQLite (surfaced in `artmark stats`). Search candidates, internal reads, and `artmark get --no-track` do not increment lookup counts. All counts remain strictly local with no telemetry.
 
 ## Search text is for rediscovery
 

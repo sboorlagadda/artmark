@@ -3,6 +3,7 @@ mod canonical;
 mod credential_cases;
 mod credentials;
 mod db;
+mod migrations;
 mod model;
 
 use anyhow::{Context, Result, anyhow};
@@ -45,7 +46,12 @@ enum Command {
         input: Option<String>,
     },
     /// Read one catalog entry by ID, canonical key, or URI
-    Get { artifact: String },
+    Get {
+        artifact: String,
+        /// Inspect the entry without incrementing its local lookup count
+        #[arg(long)]
+        no_track: bool,
+    },
     /// Add an agent-generated search card to an existing entry
     Index {
         artifact: String,
@@ -188,9 +194,9 @@ fn run() -> Outcome<()> {
                 artifact.id, artifact.canonical_key, artifact.state
             );
         }
-        Command::Get { artifact } => {
+        Command::Get { artifact, no_track } => {
             let artifact = db
-                .get(&artifact)
+                .get_tracked(&artifact, !no_track)
                 .map_err(database_error)?
                 .ok_or_else(|| (3, anyhow!("artifact not found")))?;
             if cli.json {
