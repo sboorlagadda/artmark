@@ -33,13 +33,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Register a URL or local path without fetching it
+    /// Register a URL or local path without fetching it, optionally indexing a search card in one step
     Add {
         uri: String,
         #[arg(long)]
         title: Option<String>,
         #[arg(long)]
         explicit: bool,
+        /// JSON search card file path, or '-' to read from stdin
+        #[arg(long = "json-input")]
+        input: Option<String>,
     },
     /// Read one catalog entry by ID, canonical key, or URI
     Get { artifact: String },
@@ -75,6 +78,10 @@ enum Command {
     Recent {
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long)]
+        provider: Option<String>,
     },
     /// Remove a catalog entry; the original artifact is untouched
     Forget { artifact: String },
@@ -104,10 +111,11 @@ const CONTEXT_GUIDANCE: &str = r#"<!-- artmark:context:start -->
 
 artmark is a local catalog of artifact pointers and retrieval hints. The original source remains authoritative; artmark does not fetch providers or store source documents.
 
-- When the user provides a durable artifact locator, register it with `artmark add <uri> --json`. Add `--explicit` when the user asks to save or remember it.
-- Index a search card only after inspecting the source. If the user asks to save it but the source cannot be inspected, keep only the quick registration. Do not invent a search card. Keep source facts separate from your summary, and do not copy source content or secrets.
+- Do not automatically register every URL or file path the user pastes.
+- When the user explicitly asks to save, remember, bookmark, or artmark a durable artifact, inspect the source with an available tool and save it with a search card in one step using `artmark add <uri> --explicit --json-input - --json`. If the source cannot be inspected, fall back to `artmark add <uri> --explicit --json` (with `--title` when known) and tell the user it was saved as a pointer only and is not searchable by topic until indexed.
+- Keep source facts separate from your summary, and do not copy source content or secrets.
 - Whenever the task requires identifying a durable artifact from a description without an exact locator, use `artmark search <query> --json` before provider search, even if the provider is named. Inspect likely matches with `artmark get <id> --json`, then retrieve current details through the provider.
-- At the end of the task, ask which relevant artifacts discovered through research or linked from a user-supplied artifact should be remembered. Register only those the user approves.
+- At the end of a substantive task, briefly ask whether the user wants to remember any notable durable artifacts read during the task (whether user-supplied or discovered) that are not already indexed. Save and index only those the user approves.
 - For a confirmed supersession relationship, keep a brief direct predecessor or successor note in each registered artifact's summary. Do not use special relation tags or accumulate version history.
 
 <!-- artmark:context:end -->
@@ -148,21 +156,37 @@ fn run() -> Outcome<()> {
             uri,
             title,
             explicit,
+            input,
         } => {
             canonical::identify(&uri).map_err(input_error)?;
-            let artifact = db
-                .add(&uri, title.as_deref(), explicit)
-                .map_err(database_error)?;
-            if cli.json {
-                emit(
-                    &json!({"id": artifact.id, "canonical_key": artifact.canonical_key, "state": artifact.state}),
-                );
+            let artifact = if let Some(input) = input {
+                let content = read_input(&input).map_err(input_error)?;
+                let entry: IndexInput = serde_json::from_str(&content).map_err(input_error)?;
+                entry.validate().map_err(input_error)?;
+                let artifact = db
+                    .add_and_index(&uri, title.as_deref(), explicit, entry)
+                    .map_err(database_error)?;
+                if cli.json {
+                    emit(&artifact);
+                    return Ok(());
+                }
+                artifact
             } else {
-                println!(
-                    "{}\n{}\n{}",
-                    artifact.id, artifact.canonical_key, artifact.state
-                );
-            }
+                let artifact = db
+                    .add(&uri, title.as_deref(), explicit)
+                    .map_err(database_error)?;
+                if cli.json {
+                    emit(
+                        &json!({"id": artifact.id, "canonical_key": artifact.canonical_key, "state": artifact.state}),
+                    );
+                    return Ok(());
+                }
+                artifact
+            };
+            println!(
+                "{}\n{}\n{}",
+                artifact.id, artifact.canonical_key, artifact.state
+            );
         }
         Command::Get { artifact } => {
             let artifact = db
@@ -238,10 +262,18 @@ fn run() -> Outcome<()> {
                 }
             }
         }
-        Command::Recent { limit } => {
-            let results = db.recent(limit).map_err(database_error)?;
+        Command::Recent {
+            limit,
+            state,
+            provider,
+        } => {
+            let results = db
+                .recent(limit, state.as_deref(), provider.as_deref())
+                .map_err(database_error)?;
             if cli.json {
                 emit(&json!({"results": results}));
+            } else if results.is_empty() {
+                println!("No results found.");
             } else {
                 for item in results {
                     println!(

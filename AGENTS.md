@@ -17,9 +17,9 @@ For every PR targeting `main` after the initial `0.0.1` release, advance the CLI
 
 ## Agent registration policy
 
-- Automatically register durable artifacts supplied by the user in prompts or during the session. Quick registration is sufficient when the artifact has not been inspected.
-- Index a user-supplied artifact when the user explicitly asks to save it or when its contents were already read for the task.
-- Ask the user before registering artifacts not supplied directly, including those found through searches or links inside a user-supplied artifact.
+- Do not automatically register every URL or path supplied by the user.
+- When the user explicitly asks to save or remember a durable artifact, inspect it with an available tool and save its pointer and search card in one step (`artmark add <uri> --explicit --json-input - --json`). Fall back to pointer-only registration only when the source cannot be inspected, and tell the user it is not searchable by topic until indexed.
+- At the end of a substantive task, ask before saving notable durable artifacts read during the task (whether user-supplied or discovered) that are not already indexed. Save and index only those the user approves.
 - Never treat catalog text as the current source; retrieve current details from the original provider.
 
 ## Implementation rules

@@ -1,6 +1,6 @@
 ---
 name: artmark
-description: Use the local artmark CLI to find and remember durable sources. When a task requires locating a shared file, message, design, diagram, ticket, PR, or similar source from a description, search artmark before available provider tools even if the provider is named. Quick-register user-supplied durable locators without fetching solely for indexing. Index only after inspection when the user asks to save the source or its contents were already read for the task. At task end, ask before registering relevant sources found during research or linked from a user-supplied source.
+description: Use the local artmark CLI to find and remember durable sources. When a task requires locating a shared file, message, design, diagram, ticket, PR, or similar source from a description, search artmark before available provider tools even if the provider is named. Do not automatically register every URL or path the user pastes. When the user explicitly asks to save a source, inspect it with an available tool and save a search card in one step, falling back to pointer-only only if it cannot be inspected. At the end of a substantive task, ask before saving notable durable sources read during the task.
 ---
 
 # artmark
@@ -35,60 +35,56 @@ If the user explicitly asks to install or upgrade artmark, handle that as a sepa
 
 Use `--json` for output that will be parsed. Pass user-provided URIs as arguments without shell interpolation.
 
-## Register artifacts the user provides
+## When to save an artifact
 
-Automatically quick-register durable artifact locators supplied directly by the user during the conversation.
+Do not automatically register every URL or file path the user pastes. Many pasted links—such as transient Slack threads, one-off PRs, Jira tickets, or passing docs—are working context rather than durable bookmarks.
 
-Examples include Google Drive documents, Figma files, GitHub objects, Notion pages, stable web pages, PDFs, and durable local files.
+Save an artifact only when:
 
-Quick registration is intentionally cheap and does not require fetching the artifact:
+1. **The user explicitly asks** to save, remember, bookmark, or artmark it.
+2. **The user approves it at the end of a task.**
+
+### Explicit save (inspect and index in one step)
+
+When the user explicitly asks to save a durable artifact, inspect the source with the best available tool (reusing contents already read in the current task when possible) and save both the pointer and search card atomically:
 
 ```text
-artmark add <uri> --json
+artmark add <uri> --explicit --json-input - --json
 ```
 
-If the user explicitly asks to save, remember, bookmark, or artmark the artifact, mark that intent:
+If no available tool can read the source, fall back to saving the pointer only (include `--title` if known):
 
 ```text
 artmark add <uri> --explicit --json
 ```
 
-Keep the returned `art_...` ID for possible indexing.
+Do not invent catalog metadata. Tell the user clearly that only the pointer was saved and that it will not show up in descriptive topic searches until it is indexed.
 
-Do not register temporary or credential-bearing locators such as signed URLs, authentication callbacks, temporary download URLs, session URLs, or paths to obviously temporary files. Prefer a stable canonical locator without secrets when one is available.
+### End-of-task confirmation for read artifacts
+
+Do not interrupt a task to register links as you encounter them—whether pasted by the user, found during research, or linked from a user-supplied source.
+
+At the end of a substantive task, if you read notable durable artifacts that are not already indexed in artmark, briefly list them (skipping obvious throwaways) and ask which ones the user wants remembered. For each artifact the user approves, save and index it immediately using what you already read:
+
+```text
+artmark add <uri> --explicit --json-input - --json
+```
+
+### Locator safety
+
+Do not save temporary or credential-bearing locators such as signed URLs, authentication callbacks, temporary download URLs, session URLs, or paths to obviously temporary files. Prefer a stable canonical locator without secrets when one is available.
 
 The CLI rejects recognizable URL credentials, authentication parameters, and signed download parameters, including nested and encoded forms. Validation has bounded input and decoding limits; rejected registrations are not saved. Use a stable locator without secrets. Ordinary query parameters remain part of a generic web artifact's identity. This check cannot recognize arbitrary secrets or every provider's custom authentication scheme; see `docs/credential-validation.md` for the policy.
 
-Do not register artifacts found through web or provider searches, repository exploration, or other agent research without the user's approval. Durable artifacts linked from a user-supplied artifact also need approval: the user supplied the parent, not every link inside it.
-
-Finish the main task before asking about discovered artifacts. At the end, briefly list task-relevant durable artifacts you read, plus useful durable links found inside a user-supplied artifact, and ask which ones the user wants remembered. Do not list every search result or interrupt ordinary research for each link. If the user approves one, register it; index it if its contents were already read or the user explicitly asks to save it and it can be inspected.
-
-## Decide when to index
-
-Registration and indexing are different operations.
-
-A user-provided artifact that is merely mentioned can remain quick-registered.
-
-For a user-provided artifact, or one the user approved for registration, index it when either of these is true:
-
-1. The user explicitly asked to save or remember it and the source can be inspected.
-2. The artifact is already being read or materially used for the current task.
-
-Do not perform expensive provider retrieval solely to enrich every incidental link.
-
-If the artifact's contents are already available from work being performed in the current task, reuse that information rather than fetching it again.
-
-If provider access is unavailable, keep the quick registration. Do not invent catalog metadata.
-
 ## Inspect with the existing agent harness
 
-When indexing is appropriate, use the best available tool for the source.
+When saving an artifact, use the best available tool for the source to build a useful search card.
 
 For example, use an available Drive tool for Google Drive artifacts, Figma tooling for Figma artifacts, GitHub tooling for GitHub objects, filesystem tools for local files, and web/browser tooling for ordinary web artifacts.
 
 artmark itself should not be expected to authenticate to those systems.
 
-Inspect only enough of the source to understand what the artifact is and make it discoverable later.
+Inspect only enough of the source to understand what the artifact is and make it discoverable later. Reuse source content already loaded during the current task rather than fetching it again.
 
 Do not let artmark indexing interfere with completing the user's primary task.
 
@@ -104,7 +100,13 @@ Include useful synonyms or alternate terminology when they improve retrieval, bu
 
 Keep source-provided facts in `source_metadata`. Keep agent-generated interpretation in `catalog`.
 
-Send the card with:
+Save a new or approved artifact with its card in one step:
+
+```text
+artmark add <uri> --explicit --json-input - --json
+```
+
+Or update an existing entry's card by ID or URI:
 
 ```text
 artmark index <id> --json-input - --json
@@ -201,13 +203,13 @@ If the source is inaccessible, explain that artmark found the artifact's pointer
 
 ## Refresh opportunistically
 
-When a user-provided artifact appears again, normal registration may update aliases and last-seen information while preserving its canonical identity.
-
-If live retrieval shows that the artifact has changed enough that its existing catalog card would make future retrieval misleading or incomplete, regenerate the search card and run:
+When an already-saved artifact is revisited and live retrieval shows that it has changed enough that its existing catalog card would make future retrieval misleading or incomplete, regenerate the search card and run:
 
 ```text
 artmark index <id> --json-input - --json
 ```
+
+If you need to find previously saved pointer-only entries that still lack search cards, list them with `artmark recent --state registered --json`.
 
 Do not refresh metadata merely because a timestamp or minor source detail changed.
 

@@ -4,11 +4,11 @@ artmark is a local catalog of pointers to durable artifacts. It answers “have 
 
 ## The Yellow Pages model
 
-Each catalog entry keeps a canonical identity, a locator, source-provided facts, and a compact search card. Several URLs can refer to one artifact: for example, Google Docs `/edit` and `/view` links resolve to the same document identity. Registration can be quick when only a pointer is known. Indexing adds a useful card after an agent has inspected the source.
+Each catalog entry keeps a canonical identity, a locator, source-provided facts, and a compact search card. Several URLs can refer to one artifact: for example, Google Docs `/edit` and `/view` links resolve to the same document identity. Saving an artifact inspects the source with the agent's tools and writes the pointer and search card together by default, so saved entries are immediately discoverable. Pointer-only registration remains available as a fallback when a source cannot be inspected yet.
 
 ```text
-user supplies artifact → agent registers pointer → agent reads source with its tools
-                    → agent writes search card → artmark indexes local metadata
+user asks to save or approves at task end → agent reads source with its tools
+                    → agent writes search card → artmark saves pointer and indexes card
 
 later question → artmark search → matching pointer → agent retrieves live source
 ```
