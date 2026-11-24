@@ -2,6 +2,8 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::ffi::OsString;
+use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -27,57 +29,79 @@ const MIGRATIONS: &[Migration] = &[
     },
 ];
 
+const _: () = assert!(
+    !MIGRATIONS.is_empty()
+        && MIGRATIONS[MIGRATIONS.len() - 1].target_version == CURRENT_SCHEMA_VERSION
+);
+
+struct CreatedBackup {
+    path: PathBuf,
+    is_fallback: bool,
+}
+
 pub fn migrate(conn: &mut Connection, db_path: &Path) -> Result<()> {
     migrate_with(conn, db_path, MIGRATIONS)
 }
 
 fn migrate_with(conn: &mut Connection, db_path: &Path, migrations: &[Migration]) -> Result<()> {
     let latest = migrations.last().map_or(0, |m| m.target_version);
-    let mut version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version < 0 {
-        bail!("database schema version {version} is invalid");
+    let initial_version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if initial_version < 0 {
+        bail!("database schema version {initial_version} is invalid");
     }
-    if version > latest {
+    if initial_version > latest {
         bail!(
-            "database schema version {version} is newer than this artmark build (supports up to schema version {latest})"
+            "database schema version {initial_version} is newer than this artmark build (supports up to schema version {latest})"
         );
     }
-    if version == latest {
+    if initial_version == latest {
         return Ok(());
     }
 
-    if version == 0 {
-        let existing_tables: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artifacts'",
-            [],
-            |row| row.get(0),
-        )?;
-        if existing_tables > 0 {
-            bail!(
-                "database contains an existing artifacts table with user_version 0; refusing automatic migration"
-            );
-        }
-    }
-
-    let backup_path = if version > 0 && is_on_disk(db_path) {
-        Some(create_pre_migration_backup(conn, db_path, version)?)
+    let backup = if initial_version > 0 && is_on_disk(db_path) {
+        Some(create_pre_migration_backup(conn, db_path, initial_version)?)
     } else {
         None
     };
 
-    let start_version = version;
+    let mut applied_any = false;
     for migration in migrations
         .iter()
-        .filter(|migration| migration.target_version > start_version)
+        .filter(|migration| migration.target_version > initial_version)
     {
-        if migration.target_version != version + 1 {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let locked_version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if locked_version < 0 {
+            bail!("database schema version {locked_version} is invalid");
+        }
+        if locked_version > latest {
             bail!(
-                "non-contiguous schema migration from v{version} to v{}",
+                "database schema version {locked_version} is newer than this artmark build (supports up to schema version {latest})"
+            );
+        }
+        if locked_version >= migration.target_version {
+            continue;
+        }
+        if locked_version == 0 {
+            let existing_tables: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artifacts'",
+                [],
+                |row| row.get(0),
+            )?;
+            if existing_tables > 0 {
+                bail!(
+                    "database contains an existing artifacts table with user_version 0; refusing automatic migration"
+                );
+            }
+        }
+        if migration.target_version != locked_version + 1 {
+            bail!(
+                "non-contiguous schema migration from v{locked_version} to v{}",
                 migration.target_version
             );
         }
+
         let step_result: Result<()> = (|| {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             (migration.apply)(&tx)?;
             verify_foreign_keys(&tx)?;
             verify_fts_integrity(&tx)?;
@@ -87,13 +111,13 @@ fn migrate_with(conn: &mut Connection, db_path: &Path, migrations: &[Migration])
         })();
 
         if let Err(error) = step_result {
-            if let Some(backup) = &backup_path {
+            if let Some(backup) = &backup {
                 return Err(error).with_context(|| {
                     format!(
                         "schema migration to v{} ({}) failed; database rolled back and pre-migration backup is preserved at {}",
                         migration.target_version,
                         migration.name,
-                        backup.display()
+                        backup.path.display()
                     )
                 });
             }
@@ -104,7 +128,14 @@ fn migrate_with(conn: &mut Connection, db_path: &Path, migrations: &[Migration])
                 )
             });
         }
-        version = migration.target_version;
+        applied_any = true;
+    }
+
+    if !applied_any
+        && let Some(backup) = backup
+        && backup.is_fallback
+    {
+        let _ = std::fs::remove_file(&backup.path);
     }
 
     Ok(())
@@ -119,40 +150,84 @@ fn create_pre_migration_backup(
     conn: &Connection,
     db_path: &Path,
     from_version: i64,
-) -> Result<PathBuf> {
-    let backup_path = next_backup_path(db_path, from_version);
-    let backup_str = backup_path.to_str().with_context(|| {
-        format!(
+) -> Result<CreatedBackup> {
+    let backup = reserve_backup_file(db_path, from_version)?;
+    let Some(backup_str) = backup.path.to_str() else {
+        let _ = std::fs::remove_file(&backup.path);
+        bail!(
             "pre-migration backup path is not valid UTF-8: {}",
-            backup_path.display()
-        )
-    })?;
-    conn.execute("VACUUM INTO ?1", [backup_str])
-        .with_context(|| {
+            backup.path.display()
+        );
+    };
+    if let Err(error) = conn.execute("VACUUM INTO ?1", [backup_str]) {
+        let _ = std::fs::remove_file(&backup.path);
+        return Err(error).with_context(|| {
             format!(
                 "failed to create pre-migration backup at {}",
-                backup_path.display()
+                backup.path.display()
             )
-        })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&backup_path, std::fs::Permissions::from_mode(0o600))?;
+        });
     }
-    Ok(backup_path)
+    Ok(backup)
 }
 
-fn next_backup_path(db_path: &Path, from_version: i64) -> PathBuf {
+fn reserve_backup_file(db_path: &Path, from_version: i64) -> Result<CreatedBackup> {
     let base = append_suffix(db_path, &format!(".v{from_version}.bak"));
-    if !base.exists() {
-        return base;
+    match create_restricted_file(&base) {
+        Ok(()) => {
+            return Ok(CreatedBackup {
+                path: base,
+                is_fallback: false,
+            });
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to reserve pre-migration backup at {}",
+                    base.display()
+                )
+            });
+        }
     }
-    let stamp = Utc::now().format("%Y%m%dT%H%M%SZ");
-    let unique = Uuid::now_v7().simple().to_string();
-    append_suffix(
-        db_path,
-        &format!(".v{from_version}.{stamp}.{}.bak", &unique[..8]),
+
+    for _ in 0..8 {
+        let stamp = Utc::now().format("%Y%m%dT%H%M%SZ");
+        let unique = Uuid::now_v7().simple();
+        let fallback = append_suffix(db_path, &format!(".v{from_version}.{stamp}.{unique}.bak"));
+        match create_restricted_file(&fallback) {
+            Ok(()) => {
+                return Ok(CreatedBackup {
+                    path: fallback,
+                    is_fallback: true,
+                });
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to reserve pre-migration backup at {}",
+                        fallback.display()
+                    )
+                });
+            }
+        }
+    }
+    bail!(
+        "failed to reserve a unique pre-migration backup path beside {}",
+        db_path.display()
     )
+}
+
+fn create_restricted_file(path: &Path) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path).map(|_| ())
 }
 
 fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -522,5 +597,90 @@ mod tests {
         assert!(err2.to_string().contains("user_version 0"));
         drop(conn2);
         fs::remove_dir_all(path2.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn fallback_backups_have_restricted_permissions_and_unique_full_uuids() {
+        let path = temp_db();
+        let first = reserve_backup_file(&path, 1).unwrap();
+        let second = reserve_backup_file(&path, 1).unwrap();
+        let third = reserve_backup_file(&path, 1).unwrap();
+
+        assert!(!first.is_fallback);
+        assert!(second.is_fallback);
+        assert!(third.is_fallback);
+        assert_ne!(first.path, second.path);
+        assert_ne!(second.path, third.path);
+
+        for fallback in [&second.path, &third.path] {
+            let name = fallback.file_name().unwrap().to_str().unwrap();
+            let parts: Vec<_> = name.split('.').collect();
+            let uuid_part = parts[parts.len() - 2];
+            assert_eq!(uuid_part.len(), 32, "expected full 32-hex UUID in {name}");
+            assert!(uuid_part.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for reserved in [&first.path, &second.path, &third.path] {
+                let mode = fs::metadata(reserved).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600, "expected 0600 mode on {reserved:?}");
+            }
+        }
+
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn concurrent_v1_openers_upgrade_cleanly_without_duplicate_column_errors() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let path = temp_db();
+        create_v1_fixture(&path);
+
+        let workers = 4;
+        let barrier = Arc::new(Barrier::new(workers));
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                let db_path = path.clone();
+                let sync = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    let mut conn = Connection::open(&db_path).unwrap();
+                    conn.execute_batch(
+                        "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
+                    )
+                    .unwrap();
+                    sync.wait();
+                    migrate(&mut conn, &db_path).unwrap();
+                    let version: i64 = conn
+                        .pragma_query_value(None, "user_version", |row| row.get(0))
+                        .unwrap();
+                    assert_eq!(version, CURRENT_SCHEMA_VERSION);
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let backup = append_suffix(&path, ".v1.bak");
+        assert!(backup.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&backup).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let backup_conn = Connection::open(&backup).unwrap();
+        let backup_version: i64 = backup_conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(backup_version, 1);
+
+        drop(backup_conn);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

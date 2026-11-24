@@ -684,6 +684,30 @@ fn is_locator_or_key(query: &str) -> bool {
         ]
         .iter()
         .any(|prefix| lower.starts_with(prefix))
+        || is_filesystem_path_locator(query)
+}
+
+fn is_filesystem_path_locator(query: &str) -> bool {
+    if query.starts_with('/')
+        || query.starts_with('\\')
+        || query.starts_with("./")
+        || query.starts_with("../")
+        || query.starts_with(".\\")
+        || query.starts_with("..\\")
+        || query.starts_with("~/")
+        || query.starts_with("~\\")
+    {
+        return true;
+    }
+    let bytes = query.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return true;
+    }
+    !query.chars().any(char::is_whitespace) && (query.contains('/') || query.contains('\\'))
 }
 
 fn query_terms(query: &str) -> Vec<String> {
@@ -1234,6 +1258,60 @@ mod tests {
         assert_eq!(after_forget["total_accesses"], 1);
         assert_eq!(after_forget["accessed_artifacts"], 1);
         assert_eq!(after_forget["top_accessed"][0]["id"], second.id);
+
+        drop(db);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn local_filesystem_path_search_short_circuits_without_unrelated_fts_hits() {
+        let path = test_path();
+        let mut db = Registry::open(&path).unwrap();
+        let filters = SearchFilters::default();
+
+        let local = db
+            .add_and_index(
+                "/workspace/ops/canary-deployment-runbook.md",
+                None,
+                true,
+                catalog(
+                    "Canary Deployment Runbook",
+                    "Local markdown runbook for progressive canary deployments",
+                ),
+            )
+            .unwrap();
+        let _unrelated = db
+            .add_and_index(
+                "https://www.notion.so/Backup-Runbook-0123456789abcdef0123456789abcdef",
+                None,
+                true,
+                catalog(
+                    "Postgres Backup Runbook",
+                    "Operational runbook for point-in-time recovery and light/dark dashboard theme",
+                ),
+            )
+            .unwrap();
+
+        let exact_path = db
+            .search("/workspace/ops/canary-deployment-runbook.md", 10, &filters)
+            .unwrap();
+        assert_eq!(exact_path.len(), 1);
+        assert_eq!(exact_path[0].id, local.id);
+        assert_eq!(exact_path[0].score, 1.0);
+
+        // Prose containing a slash and whitespace must still run lexical FTS search.
+        let prose = db.search("light/dark theme", 10, &filters).unwrap();
+        assert_eq!(prose.len(), 1);
+        assert_ne!(prose[0].id, local.id);
+
+        assert!(is_filesystem_path_locator("/tmp/file.md"));
+        assert!(is_filesystem_path_locator("./docs/design.md"));
+        assert!(is_filesystem_path_locator("../README.md"));
+        assert!(is_filesystem_path_locator("docs/design.md"));
+        assert!(is_filesystem_path_locator(r"C:\Users\dev\notes.md"));
+        assert!(is_filesystem_path_locator(r"\\server\share\notes.md"));
+        assert!(!is_filesystem_path_locator("roadmap"));
+        assert!(!is_filesystem_path_locator("light/dark theme"));
 
         drop(db);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
