@@ -4,10 +4,11 @@ use crate::model::{Artifact, ArtifactState, IndexInput, SearchCard, SearchFilter
 use crate::storage::{self, ARTIFACT_SELECT_COLUMNS, ArtifactRow, FTS_BM25_WEIGHTS};
 use anyhow::{Context, bail};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params, params_from_iter};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -311,75 +312,123 @@ impl Registry {
         limit: usize,
         filters: &SearchFilters<'_>,
     ) -> anyhow::Result<Vec<SearchCard>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let mut results = Vec::new();
         let mut seen = HashSet::new();
-        let mut exact_locator_match = false;
-        if let Some(artifact) = self.get_optional(query)? {
-            push_card(&mut results, &mut seen, artifact, 1.0, filters);
-            exact_locator_match = canonical::is_locator_or_key(query);
-        } else if let Ok(identity) = self.identify_locator(query)
-            && let Some(artifact) = self.get_optional(&identity.canonical_key)?
-        {
-            push_card(&mut results, &mut seen, artifact, 1.0, filters);
-            exact_locator_match = canonical::is_locator_or_key(query);
-        }
-        if exact_locator_match {
-            results.truncate(limit);
-            return Ok(results);
+        if let Some(id) = self.resolve_id(query)? {
+            let mut sql = format!("SELECT {SEARCH_CARD_COLUMNS} FROM artifacts a WHERE a.id = ?");
+            let mut query_params = vec![SqlValue::Text(id)];
+            append_filter_clauses(&mut sql, &mut query_params, filters, "a");
+            let mut stmt = self.conn.prepare(&sql)?;
+            if let Some(card) = stmt
+                .query_row(params_from_iter(query_params), |row| {
+                    search_card_row(row, 1.0)
+                })
+                .optional()?
+            {
+                seen.insert(card.id.clone());
+                results.push(card);
+            }
+            if canonical::is_locator_or_key(query) {
+                hydrate_topics(&self.conn, &mut results)?;
+                return Ok(results);
+            }
         }
 
-        let mut exact = self.conn.prepare(
-            "SELECT id FROM artifacts WHERE title=?1 COLLATE NOCASE OR source_external_id=?1 ORDER BY id LIMIT 100",
-        )?;
-        let exact_ids = exact
-            .query_map([query], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for id in exact_ids {
-            if let Some(artifact) = self.get_optional(&id)? {
-                push_card(&mut results, &mut seen, artifact, 0.95, filters);
+        if results.len() < limit {
+            let mut sql = format!(
+                "SELECT {SEARCH_CARD_COLUMNS} FROM artifacts a
+                 WHERE (a.title = ? COLLATE NOCASE OR a.source_external_id = ?)"
+            );
+            let mut query_params = vec![
+                SqlValue::Text(query.to_owned()),
+                SqlValue::Text(query.to_owned()),
+            ];
+            append_filter_clauses(&mut sql, &mut query_params, filters, "a");
+            append_exclusion_clause(&mut sql, &mut query_params, &seen, "a");
+            sql.push_str(" ORDER BY a.id ASC LIMIT ?");
+            query_params.push(SqlValue::Integer((limit - results.len()) as i64));
+            let mut stmt = self.conn.prepare(&sql)?;
+            let cards = stmt
+                .query_map(params_from_iter(query_params), |row| {
+                    search_card_row(row, 0.95)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for card in cards {
+                if seen.insert(card.id.clone()) {
+                    results.push(card);
+                }
             }
         }
 
         let terms = query_terms(query);
         if !terms.is_empty() && results.len() < limit {
             let and_query = fts_match_query(&terms, " AND ");
-            self.run_fts_pass(&and_query, 0.55, 0.35, filters, &mut seen, &mut results)?;
+            self.run_fts_pass(
+                &and_query,
+                limit,
+                0.55,
+                0.35,
+                filters,
+                &mut seen,
+                &mut results,
+            )?;
 
             if terms.len() > 1 && results.len() < limit {
                 let or_query = fts_match_query(&terms, " OR ");
-                self.run_fts_pass(&or_query, 0.05, 0.45, filters, &mut seen, &mut results)?;
+                self.run_fts_pass(
+                    &or_query,
+                    limit,
+                    0.05,
+                    0.45,
+                    filters,
+                    &mut seen,
+                    &mut results,
+                )?;
             }
         }
-        results.truncate(limit);
+        hydrate_topics(&self.conn, &mut results)?;
         Ok(results)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_fts_pass(
         &self,
         fts_query: &str,
+        limit: usize,
         score_floor: f64,
         score_span: f64,
         filters: &SearchFilters<'_>,
         seen: &mut HashSet<String>,
         results: &mut Vec<SearchCard>,
     ) -> anyhow::Result<()> {
-        let sql = format!(
-            "SELECT artifact_id, {FTS_BM25_WEIGHTS} AS rank
+        if results.len() >= limit {
+            return Ok(());
+        }
+        let mut sql = format!(
+            "SELECT {SEARCH_CARD_COLUMNS}, {FTS_BM25_WEIGHTS} AS rank
              FROM artifact_fts
-             WHERE artifact_fts MATCH ?1
-             ORDER BY rank ASC, artifact_id ASC
-             LIMIT 500"
+             JOIN artifacts a ON a.id = artifact_fts.artifact_id
+             WHERE artifact_fts MATCH ?"
         );
+        let mut query_params = vec![SqlValue::Text(fts_query.to_owned())];
+        append_filter_clauses(&mut sql, &mut query_params, filters, "a");
+        append_exclusion_clause(&mut sql, &mut query_params, seen, "a");
+        sql.push_str(" ORDER BY rank ASC, a.id ASC LIMIT ?");
+        query_params.push(SqlValue::Integer((limit - results.len()) as i64));
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map([fts_query], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        let cards = stmt
+            .query_map(params_from_iter(query_params), |row| {
+                let bm25_raw: f64 = row.get(10)?;
+                let score = bm25_to_score(bm25_raw, score_floor, score_span);
+                search_card_row(row, score)
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (id, bm25_raw) in rows {
-            if let Some(artifact) = self.get_optional(&id)? {
-                let score = bm25_to_score(bm25_raw, score_floor, score_span);
-                push_card(results, seen, artifact, score, filters);
+        for card in cards {
+            if seen.insert(card.id.clone()) {
+                results.push(card);
             }
         }
         Ok(())
@@ -762,16 +811,115 @@ fn replace_strings(
     Ok(())
 }
 
-fn push_card(
-    results: &mut Vec<SearchCard>,
-    seen: &mut HashSet<String>,
-    artifact: Artifact,
-    score: f64,
+const SEARCH_CARD_COLUMNS: &str = "a.id, a.canonical_key, a.title, a.kind, a.provider, a.state, a.summary, a.primary_uri, a.source_updated_at, a.last_indexed_at";
+
+fn search_card_row(row: &Row<'_>, score: f64) -> rusqlite::Result<SearchCard> {
+    Ok(SearchCard {
+        id: row.get(0)?,
+        canonical_key: row.get(1)?,
+        title: row.get(2)?,
+        kind: row.get(3)?,
+        provider: row.get(4)?,
+        state: row.get(5)?,
+        summary: row.get(6)?,
+        primary_uri: row.get(7)?,
+        topics: Vec::new(),
+        source_updated_at: row.get(8)?,
+        last_indexed_at: row.get(9)?,
+        score,
+    })
+}
+
+fn append_filter_clauses(
+    sql: &mut String,
+    params: &mut Vec<SqlValue>,
     filters: &SearchFilters<'_>,
+    alias: &str,
 ) {
-    if filters.allows(&artifact) && seen.insert(artifact.id.clone()) {
-        results.push(SearchCard::from_artifact(&artifact, score));
+    if let Some(provider) = filters.provider {
+        sql.push_str(&format!(" AND {alias}.provider = ?"));
+        params.push(SqlValue::Text(provider.to_owned()));
     }
+    if let Some(kind) = filters.kind {
+        sql.push_str(&format!(" AND {alias}.kind = ?"));
+        params.push(SqlValue::Text(kind.to_owned()));
+    }
+    if let Some(topic) = filters.topic {
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM topics t WHERE t.artifact_id = {alias}.id AND t.topic = ? COLLATE NOCASE)"
+        ));
+        params.push(SqlValue::Text(topic.to_owned()));
+    }
+    if let Some(tag) = filters.tag {
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM tags g WHERE g.artifact_id = {alias}.id AND g.tag = ? COLLATE NOCASE)"
+        ));
+        params.push(SqlValue::Text(tag.to_owned()));
+    }
+    if let Some(state) = filters.state {
+        sql.push_str(&format!(" AND {alias}.state = ?"));
+        params.push(SqlValue::Text(state.as_str().to_owned()));
+    }
+    if let Some(created_after) = filters.created_after {
+        sql.push_str(&format!(" AND {alias}.created_at >= ?"));
+        params.push(SqlValue::Text(created_after.to_owned()));
+    }
+    if let Some(seen_after) = filters.seen_after {
+        sql.push_str(&format!(" AND {alias}.last_seen_at >= ?"));
+        params.push(SqlValue::Text(seen_after.to_owned()));
+    }
+    if let Some(indexed_after) = filters.indexed_after {
+        sql.push_str(&format!(
+            " AND {alias}.last_indexed_at IS NOT NULL AND {alias}.last_indexed_at >= ?"
+        ));
+        params.push(SqlValue::Text(indexed_after.to_owned()));
+    }
+}
+
+fn append_exclusion_clause(
+    sql: &mut String,
+    params: &mut Vec<SqlValue>,
+    seen: &HashSet<String>,
+    alias: &str,
+) {
+    if seen.is_empty() {
+        return;
+    }
+    let placeholders = vec!["?"; seen.len()].join(", ");
+    sql.push_str(&format!(" AND {alias}.id NOT IN ({placeholders})"));
+    let mut ids: Vec<&String> = seen.iter().collect();
+    ids.sort();
+    for id in ids {
+        params.push(SqlValue::Text(id.clone()));
+    }
+}
+
+fn hydrate_topics(conn: &Connection, cards: &mut [SearchCard]) -> anyhow::Result<()> {
+    for chunk in cards.chunks_mut(500) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT artifact_id, topic FROM topics WHERE artifact_id IN ({placeholders}) ORDER BY artifact_id, topic"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let id_params: Vec<SqlValue> = chunk
+            .iter()
+            .map(|card| SqlValue::Text(card.id.clone()))
+            .collect();
+        let mut topics_by_id: HashMap<String, Vec<String>> = HashMap::new();
+        let rows = stmt.query_map(params_from_iter(id_params), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (artifact_id, topic) = row?;
+            topics_by_id.entry(artifact_id).or_default().push(topic);
+        }
+        for card in chunk {
+            if let Some(topics) = topics_by_id.remove(&card.id) {
+                card.topics = topics;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn query_terms(query: &str) -> Vec<String> {
