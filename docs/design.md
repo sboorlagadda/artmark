@@ -4,7 +4,7 @@ artmark is a local catalog of pointers to durable artifacts. It answers “have 
 
 ## The Yellow Pages model
 
-Each catalog entry keeps a canonical identity, a locator, source-provided facts, and a compact search card. Several URLs can refer to one artifact: for example, Google Docs `/edit` and `/view` links resolve to the same document identity. Saving an artifact inspects the source with the agent's tools and writes the pointer and search card together by default, so saved entries are immediately discoverable. Pointer-only registration remains available as a fallback when a source cannot be inspected yet.
+Each catalog entry keeps a canonical identity, a locator, source-provided facts, and a compact search card. Several URLs can refer to one artifact: for example, Google Docs `/edit`, `/view`, and `/u/0/d/...` links resolve to the same document identity, GitHub PR `/files` and `/commits` tabs resolve to the same PR, Slack thread replies with `thread_ts` resolve to the parent thread, and Jira, Linear, and Confluence URL variants resolve locally by URL path and query parameters without any provider API calls. Saving an artifact inspects the source with the agent's tools and writes the pointer and search card together by default, so saved entries are immediately discoverable. Pointer-only registration remains available as a fallback when a source cannot be inspected yet.
 
 ```text
 user asks to save or approves at task end → agent reads source with its tools

@@ -967,3 +967,242 @@ fn search_evaluation_corpus_achieves_target_retrieval_quality() {
 
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn canonicalization_fixture_matrix_deduplicates_across_restarts_and_rejects_credentials() {
+    let dir = std::env::temp_dir().join(format!("artmark-canon-matrix-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+
+    let matrix_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/canonicalization_matrix.json");
+    let matrix: Value = serde_json::from_str(&fs::read_to_string(matrix_path).unwrap()).unwrap();
+
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut expected_artifacts = 0i64;
+    let mut expected_aliases = 0i64;
+
+    for group in matrix["groups"].as_array().unwrap() {
+        let name = group["name"].as_str().unwrap();
+        let expected_key = group["canonical_key"].as_str().unwrap();
+        let expected_provider = group["provider"].as_str().unwrap();
+        let expected_kind = group["kind"].as_str().unwrap();
+        let expected_external_id = group["external_id"].as_str();
+        let variants = group["variants"].as_array().unwrap();
+        assert!(!variants.is_empty(), "group {name} must have variants");
+
+        // Add primary variant in a fresh CLI process.
+        let primary_uri = variants[0].as_str().unwrap();
+        let (code, added) = run(&db, &["add", primary_uri], None);
+        assert_eq!(code, 0, "group {name} primary failed");
+        let id = added["id"].as_str().unwrap().to_owned();
+        assert!(
+            seen_ids.insert(id.clone()),
+            "group {name} unexpectedly collided with an earlier group"
+        );
+        expected_artifacts += 1;
+        expected_aliases += 1;
+
+        let (code, entry) = run(&db, &["get", &id, "--no-track"], None);
+        assert_eq!(code, 0, "group {name} get failed");
+        assert_eq!(entry["canonical_key"], expected_key, "group {name}");
+        assert_eq!(entry["provider"], expected_provider, "group {name}");
+        assert_eq!(entry["kind"], expected_kind, "group {name}");
+        assert_eq!(
+            entry["source_external_id"].as_str(),
+            expected_external_id,
+            "group {name}"
+        );
+
+        // Add every equivalent variant in separate CLI processes (true restarts).
+        for variant in &variants[1..] {
+            let uri = variant.as_str().unwrap();
+            let (code, dup) = run(&db, &["add", uri], None);
+            assert_eq!(code, 0, "group {name} variant {uri} failed");
+            assert_eq!(
+                dup["id"].as_str().unwrap(),
+                id,
+                "group {name} variant {uri} did not deduplicate"
+            );
+            assert_eq!(
+                dup["canonical_key"].as_str().unwrap(),
+                expected_key,
+                "group {name} variant {uri}"
+            );
+            expected_aliases += 1;
+
+            // Every variant resolves the same artifact via `get`.
+            let (code, fetched) = run(&db, &["get", uri, "--no-track"], None);
+            assert_eq!(code, 0, "group {name} get by variant {uri} failed");
+            assert_eq!(fetched["id"].as_str().unwrap(), id);
+        }
+
+        // Exact canonical key lookup via `search` short-circuits to this artifact.
+        let (code, search) = run(&db, &["search", expected_key], None);
+        assert_eq!(code, 0, "group {name} search by key failed");
+        let results = search["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1, "group {name} canonical key search");
+        assert_eq!(results[0]["id"].as_str().unwrap(), id);
+
+        // Verify all variants are recorded as aliases on the single row.
+        let (_, final_entry) = run(&db, &["get", &id, "--no-track"], None);
+        assert_eq!(
+            final_entry["aliases"].as_array().unwrap().len(),
+            variants.len(),
+            "group {name} alias count"
+        );
+        assert_eq!(
+            row_counts(&db),
+            (expected_artifacts, expected_aliases, expected_artifacts),
+            "group {name} row counts"
+        );
+
+        // Credential-bearing variants must fail with exit 6, redact secret, and leave DB untouched.
+        for rejected in group["rejected_variants"].as_array().unwrap() {
+            let bad_uri = rejected.as_str().unwrap();
+            let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+                .args(["--database", db.to_str().unwrap(), "add", bad_uri, "--json"])
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(6),
+                "group {name} rejected variant {bad_uri}"
+            );
+            assert!(output.stdout.is_empty());
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("TEST_SECRET"));
+            assert_eq!(
+                row_counts(&db),
+                (expected_artifacts, expected_aliases, expected_artifacts),
+                "group {name} DB changed on rejected variant {bad_uri}"
+            );
+        }
+    }
+
+    // Distinct artifacts must remain distinct from every group and from each other.
+    for item in matrix["distinct"].as_array().unwrap() {
+        let name = item["name"].as_str().unwrap();
+        let uri = item["uri"].as_str().unwrap();
+        let (code, added) = run(&db, &["add", uri], None);
+        assert_eq!(code, 0, "distinct {name} failed");
+        let id = added["id"].as_str().unwrap().to_owned();
+        assert!(
+            seen_ids.insert(id.clone()),
+            "distinct {name} ({uri}) collided with an existing artifact"
+        );
+        expected_artifacts += 1;
+        expected_aliases += 1;
+
+        let (_, entry) = run(&db, &["get", &id, "--no-track"], None);
+        assert_eq!(
+            entry["provider"].as_str(),
+            item["provider"].as_str(),
+            "distinct {name}"
+        );
+        assert_eq!(
+            entry["kind"].as_str(),
+            item["kind"].as_str(),
+            "distinct {name}"
+        );
+        assert_eq!(
+            entry["source_external_id"].as_str(),
+            item["external_id"].as_str(),
+            "distinct {name}"
+        );
+    }
+
+    assert_eq!(
+        row_counts(&db),
+        (expected_artifacts, expected_aliases, expected_artifacts)
+    );
+    let (code, doctor) = run(&db, &["doctor"], None);
+    assert_eq!(code, 0);
+    assert_eq!(doctor["healthy"], true);
+    let (code, stats) = run(&db, &["stats"], None);
+    assert_eq!(code, 0);
+    assert_eq!(stats["artifacts"], expected_artifacts);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn local_path_variants_deduplicate_across_restarts_and_distinguish_files() {
+    let dir = std::env::temp_dir().join(format!("artmark-local-paths-{}", Uuid::now_v7()));
+    let work = dir.join("workspace");
+    let nested = work.join("docs");
+    fs::create_dir_all(&nested).unwrap();
+    let db = dir.join("artmark.db");
+
+    let file_a = work.join("spec.md");
+    let file_b = work.join("other.md");
+    fs::write(&file_a, "# Spec\n").unwrap();
+    fs::write(&file_b, "# Other\n").unwrap();
+
+    let run_in = |cwd: &Path, args: &[&str]| -> (i32, Value) {
+        let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+            .current_dir(cwd)
+            .args(["--database", db.to_str().unwrap()])
+            .args(args)
+            .arg("--json")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(!stdout.is_empty(), "empty stdout; stderr: {stderr}");
+        (
+            output.status.code().unwrap(),
+            serde_json::from_str(&stdout).unwrap(),
+        )
+    };
+
+    let file_a_url = url::Url::from_file_path(&file_a).unwrap().to_string();
+    let dir_url = url::Url::from_directory_path(&nested).unwrap().to_string();
+
+    let (code, first) = run_in(&work, &["add", "spec.md"]);
+    assert_eq!(code, 0);
+    let id_a = first["id"].as_str().unwrap().to_owned();
+
+    for (cwd, variant) in [
+        (work.as_path(), "./spec.md"),
+        (work.as_path(), "docs/../spec.md"),
+        (nested.as_path(), "../spec.md"),
+        (dir.as_path(), file_a.to_str().unwrap()),
+        (dir.as_path(), file_a_url.as_str()),
+    ] {
+        let (code, dup) = run_in(cwd, &["add", variant]);
+        assert_eq!(code, 0, "variant {variant} failed");
+        assert_eq!(
+            dup["id"].as_str().unwrap(),
+            id_a,
+            "variant {variant} did not deduplicate"
+        );
+    }
+
+    let (_, entry_a) = run_in(&dir, &["get", &id_a, "--no-track"]);
+    assert_eq!(entry_a["provider"], "filesystem");
+    assert_eq!(entry_a["kind"], "local_file");
+    assert_eq!(entry_a["aliases"].as_array().unwrap().len(), 6);
+
+    // Distinct local file gets a distinct record.
+    let (code, second) = run_in(&work, &["add", "other.md"]);
+    assert_eq!(code, 0);
+    assert_ne!(second["id"].as_str().unwrap(), id_a);
+
+    // Directory path with and without trailing slash and file:// URI deduplicates.
+    let nested_str = nested.to_str().unwrap().to_owned();
+    let nested_slash = format!("{nested_str}{}", std::path::MAIN_SEPARATOR);
+    let (code, dir_first) = run_in(&dir, &["add", &nested_str]);
+    assert_eq!(code, 0);
+    let dir_id = dir_first["id"].as_str().unwrap().to_owned();
+    for variant in [nested_slash.as_str(), dir_url.as_str()] {
+        let (code, dup) = run_in(&dir, &["add", variant]);
+        assert_eq!(code, 0);
+        assert_eq!(dup["id"].as_str().unwrap(), dir_id);
+    }
+    let (_, dir_entry) = run_in(&dir, &["get", &dir_id, "--no-track"]);
+    assert_eq!(dir_entry["provider"], "filesystem");
+    assert_eq!(dir_entry["kind"], "local_directory");
+
+    assert_eq!(row_counts(&db), (3, 10, 3));
+    fs::remove_dir_all(dir).unwrap();
+}

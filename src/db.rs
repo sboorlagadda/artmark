@@ -680,7 +680,16 @@ fn is_locator_or_key(query: &str) -> bool {
         || lower.starts_with("file://")
         || query.starts_with("art_")
         || [
-            "gdrive:", "figma:", "github:", "notion:", "slack:", "web:", "file:",
+            "gdrive:",
+            "figma:",
+            "github:",
+            "notion:",
+            "slack:",
+            "jira:",
+            "linear:",
+            "confluence:",
+            "web:",
+            "file:",
         ]
         .iter()
         .any(|prefix| lower.starts_with(prefix))

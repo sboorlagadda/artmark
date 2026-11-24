@@ -38,98 +38,19 @@ pub fn identify(input: &str) -> Result<Identity> {
     }
     url.set_fragment(None);
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-    let parts: Vec<_> = url.path_segments().map(|p| p.collect()).unwrap_or_default();
-    let field = |i: usize| parts.get(i).copied().unwrap_or("");
+    let mut parts: Vec<_> = url.path_segments().map(|p| p.collect()).unwrap_or_default();
+    while parts.last().is_some_and(|segment| segment.is_empty()) {
+        parts.pop();
+    }
 
-    let known = if host == "docs.google.com" && parts.len() >= 3 {
-        let subtype = match (field(0), field(1)) {
-            ("document", "d") => Some(("doc", "google_doc")),
-            ("spreadsheets", "d") => Some(("sheet", "google_sheet")),
-            ("presentation", "d") => Some(("slide", "google_slide")),
-            _ => None,
-        };
-        subtype.map(|(type_key, kind)| {
-            known_identity(
-                format!("gdrive:{type_key}:{}", field(2)),
-                kind,
-                "google_drive",
-                field(2),
-                input,
-            )
-        })
-    } else if host == "drive.google.com" && field(0) == "file" && field(1) == "d" {
-        Some(known_identity(
-            format!("gdrive:file:{}", field(2)),
-            "google_drive_file",
-            "google_drive",
-            field(2),
-            input,
-        ))
-    } else if host == "www.figma.com" || host == "figma.com" {
-        if matches!(field(0), "file" | "design" | "board") && !field(1).is_empty() {
-            Some(known_identity(
-                format!("figma:file:{}", field(1)),
-                "figma_file",
-                "figma",
-                field(1),
-                input,
-            ))
-        } else {
-            None
-        }
-    } else if host == "github.com" && !field(0).is_empty() && !field(1).is_empty() {
-        let repo = format!("{}/{}", field(0).to_lowercase(), field(1).to_lowercase());
-        match (field(2), field(3)) {
-            ("issues", number) if number.parse::<u64>().is_ok() => Some(known_identity(
-                format!("github:issue:{repo}:{number}"),
-                "github_issue",
-                "github",
-                number,
-                input,
-            )),
-            ("pull", number) if number.parse::<u64>().is_ok() => Some(known_identity(
-                format!("github:pr:{repo}:{number}"),
-                "github_pr",
-                "github",
-                number,
-                input,
-            )),
-            ("", "") => Some(known_identity(
-                format!("github:repo:{repo}"),
-                "github_repo",
-                "github",
-                &repo,
-                input,
-            )),
-            _ => None,
-        }
-    } else if matches!(host.as_str(), "notion.so" | "www.notion.so")
-        || host.ends_with(".notion.site")
-    {
-        parts.last().and_then(|part| notion_id(part)).map(|id| {
-            known_identity(
-                format!("notion:page:{id}"),
-                "notion_page",
-                "notion",
-                &id,
-                input,
-            )
-        })
-    } else if host.ends_with(".slack.com")
-        && field(0) == "archives"
-        && !field(1).is_empty()
-        && field(2).starts_with('p')
-    {
-        Some(known_identity(
-            format!("slack:thread:{}:{}:{}", host, field(1), field(2)),
-            "slack_thread",
-            "slack",
-            field(2),
-            input,
-        ))
-    } else {
-        None
-    };
+    let known = identify_google(&host, &parts, &url, input)
+        .or_else(|| identify_figma(&host, &parts, input))
+        .or_else(|| identify_github(&host, &parts, input))
+        .or_else(|| identify_notion(&host, &parts, &url, input))
+        .or_else(|| identify_slack(&host, &parts, &url, input))
+        .or_else(|| identify_jira(&host, &parts, &url, input))
+        .or_else(|| identify_linear(&host, &parts, input))
+        .or_else(|| identify_confluence(&host, &parts, &url, input));
 
     if let Some(identity) = known.filter(|id| !id.external_id.as_deref().unwrap_or("").is_empty()) {
         return Ok(identity);
@@ -147,16 +68,428 @@ pub fn identify(input: &str) -> Result<Identity> {
     })
 }
 
+fn query_param(url: &Url, name: &str) -> Option<String> {
+    url.query_pairs()
+        .find(|(key, value)| key == name && !value.is_empty())
+        .map(|(_, value)| value.into_owned())
+}
+
+fn is_digits(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|c| c.is_ascii_digit())
+}
+
+fn identify_google(host: &str, parts: &[&str], url: &Url, input: &str) -> Option<Identity> {
+    // Strip optional Google Workspace domain prefix: /a/<domain>/...
+    let parts = if parts.len() >= 3 && parts[0] == "a" && !parts[1].is_empty() {
+        &parts[2..]
+    } else {
+        parts
+    };
+
+    if host == "docs.google.com" && parts.len() >= 3 {
+        let (type_key, kind) = match parts[0] {
+            "document" => ("doc", "google_doc"),
+            "spreadsheets" => ("sheet", "google_sheet"),
+            "presentation" => ("slide", "google_slide"),
+            _ => return None,
+        };
+        let id = google_d_id(&parts[1..])?;
+        return Some(known_identity(
+            format!("gdrive:{type_key}:{id}"),
+            kind,
+            "google_drive",
+            id,
+            input,
+        ));
+    }
+
+    if host == "drive.google.com" {
+        if parts.first() == Some(&"file")
+            && let Some(id) = google_d_id(&parts[1..])
+        {
+            return Some(known_identity(
+                format!("gdrive:file:{id}"),
+                "google_drive_file",
+                "google_drive",
+                id,
+                input,
+            ));
+        }
+        if parts.first() == Some(&"drive") {
+            let folder_id = match &parts[1..] {
+                ["folders", id, ..] if !id.is_empty() => Some(*id),
+                ["u", account, "folders", id, ..] if is_digits(account) && !id.is_empty() => {
+                    Some(*id)
+                }
+                _ => None,
+            };
+            if let Some(id) = folder_id {
+                return Some(known_identity(
+                    format!("gdrive:folder:{id}"),
+                    "google_drive_folder",
+                    "google_drive",
+                    id,
+                    input,
+                ));
+            }
+        }
+        if matches!(parts, ["open"] | ["uc"])
+            && let Some(id) = query_param(url, "id")
+        {
+            return Some(known_identity(
+                format!("gdrive:file:{id}"),
+                "google_drive_file",
+                "google_drive",
+                &id,
+                input,
+            ));
+        }
+    }
+
+    None
+}
+
+fn google_d_id<'a>(tail: &'a [&'a str]) -> Option<&'a str> {
+    let id = match tail {
+        ["d", id, ..] => *id,
+        ["u", account, "d", id, ..] if is_digits(account) => *id,
+        _ => return None,
+    };
+    // Avoid colliding Google "publish to web" links (/d/e/2PACX-...) under id "e".
+    (!id.is_empty() && id != "e").then_some(id)
+}
+
+fn identify_figma(host: &str, parts: &[&str], input: &str) -> Option<Identity> {
+    if !matches!(host, "www.figma.com" | "figma.com") {
+        return None;
+    }
+    if parts.len() >= 2
+        && matches!(
+            parts[0],
+            "file" | "design" | "board" | "proto" | "slides" | "deck"
+        )
+        && !parts[1].is_empty()
+    {
+        let file_key = if parts.len() >= 4 && parts[2] == "branch" && !parts[3].is_empty() {
+            parts[3]
+        } else {
+            parts[1]
+        };
+        return Some(known_identity(
+            format!("figma:file:{file_key}"),
+            "figma_file",
+            "figma",
+            file_key,
+            input,
+        ));
+    }
+    None
+}
+
+fn identify_github(host: &str, parts: &[&str], input: &str) -> Option<Identity> {
+    if !matches!(host, "github.com" | "www.github.com") || parts.len() < 2 {
+        return None;
+    }
+    let owner = parts[0].to_ascii_lowercase();
+    let raw_repo = parts[1].to_ascii_lowercase();
+    if owner.is_empty()
+        || raw_repo.is_empty()
+        || matches!(
+            owner.as_str(),
+            "about"
+                | "apps"
+                | "collections"
+                | "enterprise"
+                | "events"
+                | "explore"
+                | "features"
+                | "issues"
+                | "join"
+                | "login"
+                | "marketplace"
+                | "new"
+                | "notifications"
+                | "organizations"
+                | "orgs"
+                | "pricing"
+                | "pulls"
+                | "search"
+                | "security"
+                | "settings"
+                | "sponsors"
+                | "topics"
+                | "users"
+        )
+    {
+        return None;
+    }
+
+    match parts.get(2).copied() {
+        None => {
+            let repo_name = raw_repo
+                .strip_suffix(".git")
+                .filter(|stem| !stem.is_empty())
+                .unwrap_or(&raw_repo);
+            let repo = format!("{owner}/{repo_name}");
+            Some(known_identity(
+                format!("github:repo:{repo}"),
+                "github_repo",
+                "github",
+                &repo,
+                input,
+            ))
+        }
+        Some("issues") => {
+            if parts.len() == 4 && parts[3].parse::<u64>().is_ok() {
+                let repo = format!("{owner}/{raw_repo}");
+                Some(known_identity(
+                    format!("github:issue:{repo}:{}", parts[3]),
+                    "github_issue",
+                    "github",
+                    parts[3],
+                    input,
+                ))
+            } else {
+                None
+            }
+        }
+        Some("pull") => {
+            let valid_pr_tail = parts.len() == 4
+                || (parts.len() == 5
+                    && matches!(
+                        parts[4],
+                        "files" | "commits" | "checks" | "changes" | "conflicts"
+                    ))
+                || (parts.len() == 6 && parts[4] == "commits" && !parts[5].is_empty());
+            if valid_pr_tail && parts[3].parse::<u64>().is_ok() {
+                let repo = format!("{owner}/{raw_repo}");
+                Some(known_identity(
+                    format!("github:pr:{repo}:{}", parts[3]),
+                    "github_pr",
+                    "github",
+                    parts[3],
+                    input,
+                ))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn identify_notion(host: &str, parts: &[&str], url: &Url, input: &str) -> Option<Identity> {
+    if !(matches!(host, "notion.so" | "www.notion.so") || host.ends_with(".notion.site")) {
+        return None;
+    }
+    let id = query_param(url, "p")
+        .and_then(|value| notion_id(&value))
+        .or_else(|| parts.last().and_then(|part| notion_id(part)))?;
+    Some(known_identity(
+        format!("notion:page:{id}"),
+        "notion_page",
+        "notion",
+        &id,
+        input,
+    ))
+}
+
+fn identify_slack(host: &str, parts: &[&str], url: &Url, input: &str) -> Option<Identity> {
+    if !host.ends_with(".slack.com") || matches!(host, "app.slack.com" | "www.slack.com") {
+        return None;
+    }
+    if parts.len() == 3
+        && parts[0] == "archives"
+        && !parts[1].is_empty()
+        && is_slack_message_id(parts[2])
+    {
+        let channel = parts[1].to_ascii_uppercase();
+        let thread_id = query_param(url, "thread_ts")
+            .and_then(|ts| slack_thread_ts_to_id(&ts))
+            .unwrap_or_else(|| parts[2].to_owned());
+        return Some(known_identity(
+            format!("slack:thread:{host}:{channel}:{thread_id}"),
+            "slack_thread",
+            "slack",
+            &thread_id,
+            input,
+        ));
+    }
+    None
+}
+
+fn is_slack_message_id(value: &str) -> bool {
+    value
+        .strip_prefix('p')
+        .is_some_and(|digits| digits.len() >= 10 && digits.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn slack_thread_ts_to_id(ts: &str) -> Option<String> {
+    let (seconds, fraction) = ts.split_once('.')?;
+    if seconds.len() >= 10 && !fraction.is_empty() && is_digits(seconds) && is_digits(fraction) {
+        Some(format!("p{seconds}{fraction}"))
+    } else {
+        None
+    }
+}
+
+fn identify_jira(host: &str, parts: &[&str], url: &Url, input: &str) -> Option<Identity> {
+    let is_atlassian = host.ends_with(".atlassian.net");
+    let is_jira_host = is_atlassian || host.starts_with("jira.") || host.contains(".jira.");
+
+    let raw_key: Option<String> = match parts {
+        ["jira", "browse", key] => Some((*key).to_owned()),
+        ["browse", key] if is_jira_host => Some((*key).to_owned()),
+        ["issues", key] if is_jira_host => Some((*key).to_owned()),
+        _ if is_jira_host
+            && parts
+                .first()
+                .is_some_and(|first| matches!(*first, "jira" | "projects"))
+            && parts.len() >= 3
+            && parts[parts.len() - 2] == "issues" =>
+        {
+            Some(parts[parts.len() - 1].to_owned())
+        }
+        _ if is_jira_host
+            && parts
+                .first()
+                .is_some_and(|first| matches!(*first, "jira" | "secure" | "projects")) =>
+        {
+            query_param(url, "selectedIssue")
+        }
+        _ => None,
+    };
+
+    let key = raw_key.and_then(|raw| normalize_issue_key(&raw, 2))?;
+    Some(known_identity(
+        format!("jira:issue:{host}:{key}"),
+        "jira_issue",
+        "jira",
+        &key,
+        input,
+    ))
+}
+
+fn identify_linear(host: &str, parts: &[&str], input: &str) -> Option<Identity> {
+    if !matches!(host, "linear.app" | "www.linear.app") {
+        return None;
+    }
+    if matches!(parts.len(), 3 | 4) && !parts[0].is_empty() && parts[1] == "issue" {
+        let workspace = parts[0].to_ascii_lowercase();
+        let key = normalize_issue_key(parts[2], 1)?;
+        return Some(known_identity(
+            format!("linear:issue:{workspace}:{key}"),
+            "linear_issue",
+            "linear",
+            &key,
+            input,
+        ));
+    }
+    None
+}
+
+fn normalize_issue_key(raw: &str, min_project_len: usize) -> Option<String> {
+    let (project, number) = raw.split_once('-')?;
+    if number.contains('-') {
+        return None;
+    }
+    if project.len() < min_project_len || project.len() > 32 {
+        return None;
+    }
+    let mut chars = project.chars();
+    if !chars.next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    if !is_digits(number) || !number.parse::<u64>().is_ok_and(|n| n > 0) {
+        return None;
+    }
+    Some(format!("{}-{number}", project.to_ascii_uppercase()))
+}
+
+fn identify_confluence(host: &str, parts: &[&str], url: &Url, input: &str) -> Option<Identity> {
+    let is_atlassian = host.ends_with(".atlassian.net");
+    let is_confluence_host =
+        is_atlassian || host.starts_with("confluence.") || host.contains(".confluence.");
+
+    let (rest, trusted_confluence_context) = if is_atlassian {
+        (parts.strip_prefix(&["wiki"])?, true)
+    } else if let Some(after) = parts.strip_prefix(&["confluence"]) {
+        (after, true)
+    } else if is_confluence_host {
+        let after = parts.strip_prefix(&["wiki"]).unwrap_or(parts);
+        (after, true)
+    } else if let Some(after) = parts.strip_prefix(&["wiki"]) {
+        (after, false)
+    } else {
+        (parts, false)
+    };
+
+    let page_id: Option<String> = match rest {
+        ["spaces", space, "pages", id] | ["spaces", space, "pages", id, _]
+            if trusted_confluence_context && !space.is_empty() && valid_numeric_id(id) =>
+        {
+            Some((*id).to_owned())
+        }
+        ["spaces", space, "pages", "edit-v2" | "edit", id]
+            if trusted_confluence_context && !space.is_empty() && valid_numeric_id(id) =>
+        {
+            Some((*id).to_owned())
+        }
+        ["pages", "viewpage.action"] => {
+            query_param(url, "pageId").filter(|id| valid_numeric_id(id))
+        }
+        _ => None,
+    };
+
+    let page_id = page_id?;
+    Some(known_identity(
+        format!("confluence:page:{host}:{page_id}"),
+        "confluence_page",
+        "confluence",
+        &page_id,
+        input,
+    ))
+}
+
+fn valid_numeric_id(value: &str) -> bool {
+    is_digits(value) && value.parse::<u64>().is_ok_and(|n| n > 0)
+}
+
 fn notion_id(segment: &str) -> Option<String> {
     let plain = segment.rsplit('-').next()?;
-    let suffix = if plain.len() == 32 {
-        plain
+    if plain.len() == 32 && plain.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Some(plain.to_ascii_lowercase());
+    }
+    let start = segment.len().checked_sub(36)?;
+    if !segment.is_char_boundary(start) {
+        return None;
+    }
+    if start > 0 && segment.as_bytes()[start - 1] != b'-' {
+        return None;
+    }
+    let suffix = &segment[start..];
+    if is_uuid_36(suffix) {
+        Some(suffix.replace('-', "").to_ascii_lowercase())
     } else {
-        segment.get(segment.len().checked_sub(36)?..)?
-    };
-    let normalized = suffix.replace('-', "").to_ascii_lowercase();
-    (normalized.len() == 32 && normalized.chars().all(|c| c.is_ascii_hexdigit()))
-        .then_some(normalized)
+        None
+    }
+}
+
+fn is_uuid_36(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    bytes.iter().enumerate().all(|(index, byte)| {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            *byte == b'-'
+        } else {
+            byte.is_ascii_hexdigit()
+        }
+    })
 }
 
 fn known_identity(key: String, kind: &str, provider: &str, id: &str, uri: &str) -> Identity {
@@ -313,5 +646,55 @@ mod tests {
             format!("file:{}", expected.display())
         );
         assert_eq!(identity.kind, "local_file");
+    }
+
+    #[test]
+    fn notion_non_ascii_segments_do_not_panic() {
+        let with_uuid =
+            identify("https://www.notion.so/日本語-01234567-89ab-cdef-0123-456789abcdef").unwrap();
+        assert_eq!(
+            with_uuid.canonical_key,
+            "notion:page:0123456789abcdef0123456789abcdef"
+        );
+        let without_id = identify("https://www.notion.so/a🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀").unwrap();
+        assert_eq!(without_id.provider.as_deref(), Some("web"));
+    }
+
+    #[test]
+    fn jira_linear_and_confluence_rules_are_local_and_scoped() {
+        let jira_browse = identify("https://acme.atlassian.net/browse/eng-123").unwrap();
+        let jira_board = identify(
+            "https://acme.atlassian.net/jira/software/c/projects/ENG/boards/4?selectedIssue=ENG-123",
+        )
+        .unwrap();
+        assert_eq!(jira_browse.canonical_key, jira_board.canonical_key);
+        assert_eq!(
+            jira_browse.canonical_key,
+            "jira:issue:acme.atlassian.net:ENG-123"
+        );
+        assert_eq!(jira_browse.provider.as_deref(), Some("jira"));
+        assert_eq!(jira_browse.kind, "jira_issue");
+        assert_eq!(jira_browse.external_id.as_deref(), Some("ENG-123"));
+
+        let linear_bare = identify("https://linear.app/acme/issue/ENG-42").unwrap();
+        let linear_slug =
+            identify("https://www.linear.app/ACME/issue/eng-42/fix-retry-storm#comment-1").unwrap();
+        assert_eq!(linear_bare.canonical_key, linear_slug.canonical_key);
+        assert_eq!(linear_bare.canonical_key, "linear:issue:acme:ENG-42");
+
+        let conf_page =
+            identify("https://acme.atlassian.net/wiki/spaces/ENG/pages/123456789/Overview")
+                .unwrap();
+        let conf_edit =
+            identify("https://acme.atlassian.net/wiki/spaces/ENG/pages/edit-v2/123456789").unwrap();
+        let conf_legacy =
+            identify("https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123456789")
+                .unwrap();
+        assert_eq!(conf_page.canonical_key, conf_edit.canonical_key);
+        assert_eq!(conf_page.canonical_key, conf_legacy.canonical_key);
+        assert_eq!(
+            conf_page.canonical_key,
+            "confluence:page:acme.atlassian.net:123456789"
+        );
     }
 }
