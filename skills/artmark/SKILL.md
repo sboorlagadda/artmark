@@ -7,7 +7,7 @@ description: Use the local artmark CLI to find and remember durable sources. Whe
 
 artmark is a local bookmark manager for agents.
 
-It keeps durable catalog entries for pointers that would otherwise be lost with the current session: Google Docs, Figma files, GitHub repositories/issues/PRs, PDFs, web pages, local files, and similar durable objects.
+It keeps durable catalog entries for pointers that would otherwise be lost with the current session: Google Docs, Figma files, GitHub repositories/issues/PRs, Notion pages, Slack threads, Jira and Linear issues, Confluence pages, PDFs, web pages, local files, and similar durable objects.
 
 artmark stores enough information to **find an artifact again**. It does not store or replace the artifact itself.
 

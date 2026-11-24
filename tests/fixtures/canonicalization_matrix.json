@@ -1,0 +1,513 @@
+{
+  "description": "Local URL canonicalization, alias deduplication, and credential rejection fixture matrix (Issue #11).",
+  "groups": [
+    {
+      "name": "google_doc",
+      "canonical_key": "gdrive:doc:DOC_AUTH_123",
+      "provider": "google_drive",
+      "kind": "google_doc",
+      "external_id": "DOC_AUTH_123",
+      "variants": [
+        "https://docs.google.com/document/d/DOC_AUTH_123/edit",
+        "https://docs.google.com/document/d/DOC_AUTH_123/view",
+        "https://docs.google.com/document/d/DOC_AUTH_123/preview",
+        "https://docs.google.com/document/d/DOC_AUTH_123/copy",
+        "https://docs.google.com/document/d/DOC_AUTH_123",
+        "https://docs.google.com/document/u/0/d/DOC_AUTH_123/edit?usp=sharing#heading=h.abc",
+        "https://docs.google.com/document/u/2/d/DOC_AUTH_123/view?tab=t.0",
+        "https://DOCS.GOOGLE.COM/a/acme.com/document/u/1/d/DOC_AUTH_123/edit"
+      ],
+      "rejected_variants": [
+        "https://docs.google.com/document/u/0/d/DOC_AUTH_123/edit?resourcekey=TEST_SECRET",
+        "https://docs.google.com/document/d/DOC_AUTH_123/view?token=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "google_sheet",
+      "canonical_key": "gdrive:sheet:SHEET_BUDGET_456",
+      "provider": "google_drive",
+      "kind": "google_sheet",
+      "external_id": "SHEET_BUDGET_456",
+      "variants": [
+        "https://docs.google.com/spreadsheets/d/SHEET_BUDGET_456/edit#gid=0",
+        "https://docs.google.com/spreadsheets/u/1/d/SHEET_BUDGET_456/edit?gid=98765#gid=98765",
+        "https://docs.google.com/spreadsheets/d/SHEET_BUDGET_456/view?usp=sharing",
+        "https://docs.google.com/a/acme.com/spreadsheets/d/SHEET_BUDGET_456/edit"
+      ],
+      "rejected_variants": [
+        "https://docs.google.com/spreadsheets/u/1/d/SHEET_BUDGET_456/edit?access_token=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "google_slide",
+      "canonical_key": "gdrive:slide:SLIDE_ARCH_789",
+      "provider": "google_drive",
+      "kind": "google_slide",
+      "external_id": "SLIDE_ARCH_789",
+      "variants": [
+        "https://docs.google.com/presentation/d/SLIDE_ARCH_789/edit#slide=id.p",
+        "https://docs.google.com/presentation/u/0/d/SLIDE_ARCH_789/present?slide=id.g123",
+        "https://docs.google.com/presentation/d/SLIDE_ARCH_789/preview",
+        "https://docs.google.com/a/acme.com/presentation/u/0/d/SLIDE_ARCH_789/edit"
+      ],
+      "rejected_variants": [
+        "https://docs.google.com/presentation/d/SLIDE_ARCH_789/edit?sig=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "google_drive_file",
+      "canonical_key": "gdrive:file:DRIVE_PDF_321",
+      "provider": "google_drive",
+      "kind": "google_drive_file",
+      "external_id": "DRIVE_PDF_321",
+      "variants": [
+        "https://drive.google.com/file/d/DRIVE_PDF_321/view?usp=sharing",
+        "https://drive.google.com/file/u/1/d/DRIVE_PDF_321/preview",
+        "https://drive.google.com/a/acme.com/file/d/DRIVE_PDF_321/view?usp=drive_link",
+        "https://drive.google.com/open?id=DRIVE_PDF_321",
+        "https://drive.google.com/uc?id=DRIVE_PDF_321&export=download"
+      ],
+      "rejected_variants": [
+        "https://drive.google.com/file/d/DRIVE_PDF_321/view?resourcekey=TEST_SECRET",
+        "https://drive.google.com/open?id=DRIVE_PDF_321&auth=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "google_drive_folder",
+      "canonical_key": "gdrive:folder:FOLDER_SPEC_654",
+      "provider": "google_drive",
+      "kind": "google_drive_folder",
+      "external_id": "FOLDER_SPEC_654",
+      "variants": [
+        "https://drive.google.com/drive/folders/FOLDER_SPEC_654",
+        "https://drive.google.com/drive/u/0/folders/FOLDER_SPEC_654?usp=drive_link",
+        "https://drive.google.com/a/acme.com/drive/folders/FOLDER_SPEC_654/"
+      ],
+      "rejected_variants": [
+        "https://drive.google.com/drive/folders/FOLDER_SPEC_654?resourcekey=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "figma_design_file",
+      "canonical_key": "figma:file:FIG_MAIN_KEY",
+      "provider": "figma",
+      "kind": "figma_file",
+      "external_id": "FIG_MAIN_KEY",
+      "variants": [
+        "https://www.figma.com/file/FIG_MAIN_KEY/Onboarding-v1?node-id=1-2",
+        "https://www.figma.com/design/FIG_MAIN_KEY/Onboarding-v2?node-id=3-4&m=dev",
+        "https://figma.com/proto/FIG_MAIN_KEY/Onboarding-Proto?scaling=min-zoom#frame",
+        "https://www.figma.com/design/FIG_MAIN_KEY/"
+      ],
+      "rejected_variants": [
+        "https://www.figma.com/design/FIG_MAIN_KEY/Onboarding?token=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "figma_branch_file",
+      "canonical_key": "figma:file:FIG_BRANCH_KEY",
+      "provider": "figma",
+      "kind": "figma_file",
+      "external_id": "FIG_BRANCH_KEY",
+      "variants": [
+        "https://www.figma.com/design/FIG_MAIN_KEY/branch/FIG_BRANCH_KEY/Dark-Mode-Exploration",
+        "https://figma.com/file/FIG_MAIN_KEY/branch/FIG_BRANCH_KEY/Renamed-Branch?node-id=12-34"
+      ],
+      "rejected_variants": [
+        "https://www.figma.com/design/FIG_MAIN_KEY/branch/FIG_BRANCH_KEY/Dark-Mode?api_key=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "figma_board",
+      "canonical_key": "figma:file:FIG_BOARD_KEY",
+      "provider": "figma",
+      "kind": "figma_file",
+      "external_id": "FIG_BOARD_KEY",
+      "variants": [
+        "https://www.figma.com/board/FIG_BOARD_KEY/Q4-Planning-Board?node-id=0-1",
+        "https://figma.com/board/FIG_BOARD_KEY/Updated-Board-Title/"
+      ],
+      "rejected_variants": []
+    },
+    {
+      "name": "figma_slides",
+      "canonical_key": "figma:file:FIG_DECK_KEY",
+      "provider": "figma",
+      "kind": "figma_file",
+      "external_id": "FIG_DECK_KEY",
+      "variants": [
+        "https://www.figma.com/slides/FIG_DECK_KEY/Design-Review-Deck",
+        "https://figma.com/deck/FIG_DECK_KEY/Design-Review-Deck?node-id=1-1"
+      ],
+      "rejected_variants": []
+    },
+    {
+      "name": "github_repo",
+      "canonical_key": "github:repo:acme/platform",
+      "provider": "github",
+      "kind": "github_repo",
+      "external_id": "acme/platform",
+      "variants": [
+        "https://github.com/Acme/Platform",
+        "https://github.com/acme/platform/",
+        "https://www.github.com/ACME/Platform.git",
+        "https://github.com/acme/platform?tab=readme-ov-file#install"
+      ],
+      "rejected_variants": [
+        "https://user:TEST_SECRET@github.com/acme/platform.git"
+      ]
+    },
+    {
+      "name": "github_issue",
+      "canonical_key": "github:issue:acme/platform:42",
+      "provider": "github",
+      "kind": "github_issue",
+      "external_id": "42",
+      "variants": [
+        "https://github.com/Acme/Platform/issues/42",
+        "https://github.com/acme/platform/issues/42/",
+        "https://www.github.com/acme/platform/issues/42#issuecomment-123456"
+      ],
+      "rejected_variants": [
+        "https://github.com/acme/platform/issues/42?token=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "github_pr",
+      "canonical_key": "github:pr:acme/platform:42",
+      "provider": "github",
+      "kind": "github_pr",
+      "external_id": "42",
+      "variants": [
+        "https://github.com/Acme/Platform/pull/42",
+        "https://github.com/acme/platform/pull/42/",
+        "https://github.com/acme/platform/pull/42/files",
+        "https://github.com/acme/platform/pull/42/files?diff=unified&w=1#diff-abcdef",
+        "https://github.com/acme/platform/pull/42/commits",
+        "https://github.com/acme/platform/pull/42/commits/0123456789abcdef",
+        "https://www.github.com/acme/platform/pull/42/checks"
+      ],
+      "rejected_variants": [
+        "https://github.com/acme/platform/pull/42/files?access_token=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "notion_page",
+      "canonical_key": "notion:page:0123456789abcdef0123456789abcdef",
+      "provider": "notion",
+      "kind": "notion_page",
+      "external_id": "0123456789abcdef0123456789abcdef",
+      "variants": [
+        "https://www.notion.so/Planning-0123456789abcdef0123456789abcdef",
+        "https://notion.so/acme/Renamed-Title-0123456789ABCDEF0123456789ABCDEF/",
+        "https://acme.notion.site/01234567-89ab-cdef-0123-456789abcdef?pvs=4#block123",
+        "https://www.notion.so/acme/db111111111111111111111111111111?v=22222222222222222222222222222222&p=0123456789abcdef0123456789abcdef&pm=s"
+      ],
+      "rejected_variants": [
+        "https://www.notion.so/Planning-0123456789abcdef0123456789abcdef?token=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "slack_thread",
+      "canonical_key": "slack:thread:acme.slack.com:C01234567:p1700000000123456",
+      "provider": "slack",
+      "kind": "slack_thread",
+      "external_id": "p1700000000123456",
+      "variants": [
+        "https://acme.slack.com/archives/C01234567/p1700000000123456",
+        "https://ACME.slack.com/archives/c01234567/p1700000000123456/",
+        "https://acme.slack.com/archives/C01234567/p1700000000999999?thread_ts=1700000000.123456&cid=C01234567"
+      ],
+      "rejected_variants": [
+        "https://acme.slack.com/archives/C01234567/p1700000000123456?token=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "jira_cloud_issue",
+      "canonical_key": "jira:issue:acme.atlassian.net:ENG-123",
+      "provider": "jira",
+      "kind": "jira_issue",
+      "external_id": "ENG-123",
+      "variants": [
+        "https://acme.atlassian.net/browse/ENG-123",
+        "https://ACME.atlassian.net/browse/eng-123/?focusedCommentId=456#comment-456",
+        "https://acme.atlassian.net/issues/ENG-123",
+        "https://acme.atlassian.net/projects/ENG/issues/ENG-123?filter=allopenissues",
+        "https://acme.atlassian.net/jira/software/projects/ENG/issues/ENG-123",
+        "https://acme.atlassian.net/jira/software/c/projects/ENG/boards/4/backlog?selectedIssue=ENG-123",
+        "https://acme.atlassian.net/jira/your-work?selectedIssue=eng-123"
+      ],
+      "rejected_variants": [
+        "https://acme.atlassian.net/browse/ENG-123?session_id=TEST_SECRET",
+        "https://user:TEST_SECRET@acme.atlassian.net/browse/ENG-123"
+      ]
+    },
+    {
+      "name": "jira_self_hosted_issue",
+      "canonical_key": "jira:issue:jira.example.com:PLAT-77",
+      "provider": "jira",
+      "kind": "jira_issue",
+      "external_id": "PLAT-77",
+      "variants": [
+        "https://jira.example.com/browse/PLAT-77",
+        "https://jira.example.com:443/browse/PLAT-77",
+        "https://JIRA.example.com/browse/plat-77#activity",
+        "https://jira.example.com/secure/RapidBoard.jspa?rapidView=5&selectedIssue=PLAT-77"
+      ],
+      "rejected_variants": [
+        "https://jira.example.com/browse/PLAT-77?api_key=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "jira_self_hosted_non_default_port",
+      "canonical_key": "jira:issue:jira.example.com:8443:PLAT-77",
+      "provider": "jira",
+      "kind": "jira_issue",
+      "external_id": "PLAT-77",
+      "variants": [
+        "https://jira.example.com:8443/browse/PLAT-77",
+        "https://JIRA.example.com:8443/browse/plat-77#activity"
+      ],
+      "rejected_variants": []
+    },
+    {
+      "name": "jira_context_path_issue",
+      "canonical_key": "jira:issue:tools.example.com:OPS-9",
+      "provider": "jira",
+      "kind": "jira_issue",
+      "external_id": "OPS-9",
+      "variants": [
+        "https://tools.example.com/jira/browse/OPS-9",
+        "https://tools.example.com/jira/browse/ops-9/"
+      ],
+      "rejected_variants": []
+    },
+    {
+      "name": "linear_issue",
+      "canonical_key": "linear:issue:acme:ENG-42",
+      "provider": "linear",
+      "kind": "linear_issue",
+      "external_id": "ENG-42",
+      "variants": [
+        "https://linear.app/acme/issue/ENG-42",
+        "https://linear.app/acme/issue/ENG-42/fix-webhook-retry-backoff",
+        "https://www.linear.app/ACME/issue/eng-42/renamed-title-slug#comment-999"
+      ],
+      "rejected_variants": [
+        "https://linear.app/acme/issue/ENG-42?api_key=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "confluence_cloud_page",
+      "canonical_key": "confluence:page:acme.atlassian.net:123456789",
+      "provider": "confluence",
+      "kind": "confluence_page",
+      "external_id": "123456789",
+      "variants": [
+        "https://acme.atlassian.net/wiki/spaces/ENG/pages/123456789/Architecture+Overview",
+        "https://ACME.atlassian.net/wiki/spaces/ENG/pages/123456789/Renamed+Overview?focusedCommentId=77#section-2",
+        "https://acme.atlassian.net/wiki/spaces/ENG/pages/123456789",
+        "https://acme.atlassian.net/wiki/spaces/ENG/pages/edit-v2/123456789",
+        "https://acme.atlassian.net/wiki/spaces/PLATFORM/pages/123456789/Moved+Space",
+        "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123456789"
+      ],
+      "rejected_variants": [
+        "https://acme.atlassian.net/wiki/spaces/ENG/pages/123456789?jwt=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "confluence_self_hosted_page",
+      "canonical_key": "confluence:page:confluence.example.com:987654321",
+      "provider": "confluence",
+      "kind": "confluence_page",
+      "external_id": "987654321",
+      "variants": [
+        "https://confluence.example.com/spaces/ENG/pages/987654321/Incident-Runbook",
+        "https://confluence.example.com:443/pages/viewpage.action?pageId=987654321",
+        "https://confluence.example.com/pages/viewpage.action?pageId=987654321"
+      ],
+      "rejected_variants": []
+    },
+    {
+      "name": "confluence_self_hosted_non_default_port",
+      "canonical_key": "confluence:page:confluence.example.com:8443:987654321",
+      "provider": "confluence",
+      "kind": "confluence_page",
+      "external_id": "987654321",
+      "variants": [
+        "https://confluence.example.com:8443/spaces/ENG/pages/987654321/Incident-Runbook",
+        "https://confluence.example.com:8443/pages/viewpage.action?pageId=987654321"
+      ],
+      "rejected_variants": []
+    },
+    {
+      "name": "web_generic_normalized",
+      "canonical_key": "web:https://example.com/docs/search?q=fts5&page=1",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null,
+      "variants": [
+        "https://example.com/docs/search?q=fts5&page=1",
+        "HTTPS://EXAMPLE.COM:443/docs/search?q=fts5&page=1#results",
+        "https://example.com/docs/./sub/../search?q=fts5&page=1"
+      ],
+      "rejected_variants": [
+        "https://example.com/docs/search?q=fts5&X-Amz-Signature=TEST_SECRET"
+      ]
+    },
+    {
+      "name": "web_non_default_port",
+      "canonical_key": "web:http://example.com:8080/status",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null,
+      "variants": [
+        "http://example.com:8080/status",
+        "HTTP://EXAMPLE.COM:8080/status#health"
+      ],
+      "rejected_variants": []
+    }
+  ],
+  "distinct": [
+    {
+      "name": "google_published_doc_a",
+      "uri": "https://docs.google.com/document/d/e/2PACX-1vFirstPublished/pub",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "google_published_doc_b",
+      "uri": "https://docs.google.com/document/d/e/2PACX-1vSecondPublished/pub",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "github_blob_not_repo",
+      "uri": "https://github.com/acme/platform/blob/main/README.md",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "github_tree_not_repo",
+      "uri": "https://github.com/acme/platform/tree/main",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "github_reserved_orgs_path",
+      "uri": "https://github.com/orgs/acme",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "github_different_pr",
+      "uri": "https://github.com/acme/platform/pull/43",
+      "provider": "github",
+      "kind": "github_pr",
+      "external_id": "43"
+    },
+    {
+      "name": "slack_different_thread",
+      "uri": "https://acme.slack.com/archives/C01234567/p1700000000777777",
+      "provider": "slack",
+      "kind": "slack_thread",
+      "external_id": "p1700000000777777"
+    },
+    {
+      "name": "slack_app_client_link",
+      "uri": "https://app.slack.com/client/T01234/C01234567/thread/C01234567-1700000000.123456",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "jira_other_tenant_same_key",
+      "uri": "https://beta.atlassian.net/browse/ENG-123",
+      "provider": "jira",
+      "kind": "jira_issue",
+      "external_id": "ENG-123"
+    },
+    {
+      "name": "jira_other_non_default_port_same_key",
+      "uri": "https://jira.example.com:9443/browse/PLAT-77",
+      "provider": "jira",
+      "kind": "jira_issue",
+      "external_id": "PLAT-77"
+    },
+    {
+      "name": "jira_board_without_selected_issue",
+      "uri": "https://acme.atlassian.net/jira/software/c/projects/ENG/boards/4/backlog",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "non_jira_browse_path",
+      "uri": "https://shop.example.com/browse/SKU-123",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "linear_other_workspace_same_key",
+      "uri": "https://linear.app/beta/issue/ENG-42/other-workspace",
+      "provider": "linear",
+      "kind": "linear_issue",
+      "external_id": "ENG-42"
+    },
+    {
+      "name": "linear_project_not_issue",
+      "uri": "https://linear.app/acme/project/q4-auth-rollout-a1b2c3d4e5f6",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "confluence_other_tenant_same_page_id",
+      "uri": "https://beta.atlassian.net/wiki/spaces/ENG/pages/123456789/Architecture",
+      "provider": "confluence",
+      "kind": "confluence_page",
+      "external_id": "123456789"
+    },
+    {
+      "name": "confluence_other_non_default_port_same_page_id",
+      "uri": "https://confluence.example.com:9443/pages/viewpage.action?pageId=987654321",
+      "provider": "confluence",
+      "kind": "confluence_page",
+      "external_id": "987654321"
+    },
+    {
+      "name": "confluence_short_link_not_guessed",
+      "uri": "https://acme.atlassian.net/wiki/x/AQB2Cw",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "confluence_display_title_not_guessed",
+      "uri": "https://acme.atlassian.net/wiki/display/ENG/Architecture+Overview",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "web_http_distinct_from_https",
+      "uri": "http://example.com/docs/search?q=fts5&page=1",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    },
+    {
+      "name": "web_different_query_distinct",
+      "uri": "https://example.com/docs/search?q=fts5&page=2",
+      "provider": "web",
+      "kind": "web_page",
+      "external_id": null
+    }
+  ]
+}

@@ -766,7 +766,7 @@ fn cli_upgrades_v1_database_creates_backup_and_refuses_newer_schema() {
     let (code, doctor) = run(&db, &["doctor"], None);
     assert_eq!(code, 0);
     assert_eq!(doctor["healthy"], true);
-    assert_eq!(doctor["schema_version"], 2);
+    assert_eq!(doctor["schema_version"], 3);
     assert_eq!(doctor["foreign_key_integrity"], true);
     assert_eq!(doctor["fts_integrity"], true);
 
@@ -964,6 +964,474 @@ fn search_evaluation_corpus_achieves_target_retrieval_quality() {
 
     assert_eq!(evaluated, 28);
     assert_eq!(hit_at_1, 28);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn canonicalization_fixture_matrix_deduplicates_across_restarts_and_rejects_credentials() {
+    let dir = std::env::temp_dir().join(format!("artmark-canon-matrix-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+
+    let matrix_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/canonicalization_matrix.json");
+    let matrix: Value = serde_json::from_str(&fs::read_to_string(matrix_path).unwrap()).unwrap();
+
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut expected_artifacts = 0i64;
+    let mut expected_aliases = 0i64;
+
+    for group in matrix["groups"].as_array().unwrap() {
+        let name = group["name"].as_str().unwrap();
+        let expected_key = group["canonical_key"].as_str().unwrap();
+        let expected_provider = group["provider"].as_str().unwrap();
+        let expected_kind = group["kind"].as_str().unwrap();
+        let expected_external_id = group["external_id"].as_str();
+        let variants = group["variants"].as_array().unwrap();
+        assert!(!variants.is_empty(), "group {name} must have variants");
+
+        // Add primary variant in a fresh CLI process.
+        let primary_uri = variants[0].as_str().unwrap();
+        let (code, added) = run(&db, &["add", primary_uri], None);
+        assert_eq!(code, 0, "group {name} primary failed");
+        let id = added["id"].as_str().unwrap().to_owned();
+        assert!(
+            seen_ids.insert(id.clone()),
+            "group {name} unexpectedly collided with an earlier group"
+        );
+        expected_artifacts += 1;
+        expected_aliases += 1;
+
+        let (code, entry) = run(&db, &["get", &id, "--no-track"], None);
+        assert_eq!(code, 0, "group {name} get failed");
+        assert_eq!(entry["canonical_key"], expected_key, "group {name}");
+        assert_eq!(entry["provider"], expected_provider, "group {name}");
+        assert_eq!(entry["kind"], expected_kind, "group {name}");
+        assert_eq!(
+            entry["source_external_id"].as_str(),
+            expected_external_id,
+            "group {name}"
+        );
+
+        // Add every equivalent variant in separate CLI processes (true restarts).
+        for variant in &variants[1..] {
+            let uri = variant.as_str().unwrap();
+            let (code, dup) = run(&db, &["add", uri], None);
+            assert_eq!(code, 0, "group {name} variant {uri} failed");
+            assert_eq!(
+                dup["id"].as_str().unwrap(),
+                id,
+                "group {name} variant {uri} did not deduplicate"
+            );
+            assert_eq!(
+                dup["canonical_key"].as_str().unwrap(),
+                expected_key,
+                "group {name} variant {uri}"
+            );
+            expected_aliases += 1;
+
+            // Every variant resolves the same artifact via `get`.
+            let (code, fetched) = run(&db, &["get", uri, "--no-track"], None);
+            assert_eq!(code, 0, "group {name} get by variant {uri} failed");
+            assert_eq!(fetched["id"].as_str().unwrap(), id);
+        }
+
+        // Exact canonical key lookup via `search` short-circuits to this artifact.
+        let (code, search) = run(&db, &["search", expected_key], None);
+        assert_eq!(code, 0, "group {name} search by key failed");
+        let results = search["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1, "group {name} canonical key search");
+        assert_eq!(results[0]["id"].as_str().unwrap(), id);
+
+        // Verify all variants are recorded as aliases on the single row.
+        let (_, final_entry) = run(&db, &["get", &id, "--no-track"], None);
+        assert_eq!(
+            final_entry["aliases"].as_array().unwrap().len(),
+            variants.len(),
+            "group {name} alias count"
+        );
+        assert_eq!(
+            row_counts(&db),
+            (expected_artifacts, expected_aliases, expected_artifacts),
+            "group {name} row counts"
+        );
+
+        // Credential-bearing variants must fail with exit 6, redact secret, and leave DB untouched.
+        for rejected in group["rejected_variants"].as_array().unwrap() {
+            let bad_uri = rejected.as_str().unwrap();
+            let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+                .args(["--database", db.to_str().unwrap(), "add", bad_uri, "--json"])
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(6),
+                "group {name} rejected variant {bad_uri}"
+            );
+            assert!(output.stdout.is_empty());
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("TEST_SECRET"));
+            assert_eq!(
+                row_counts(&db),
+                (expected_artifacts, expected_aliases, expected_artifacts),
+                "group {name} DB changed on rejected variant {bad_uri}"
+            );
+        }
+    }
+
+    // Distinct artifacts must remain distinct from every group and from each other.
+    for item in matrix["distinct"].as_array().unwrap() {
+        let name = item["name"].as_str().unwrap();
+        let uri = item["uri"].as_str().unwrap();
+        let (code, added) = run(&db, &["add", uri], None);
+        assert_eq!(code, 0, "distinct {name} failed");
+        let id = added["id"].as_str().unwrap().to_owned();
+        assert!(
+            seen_ids.insert(id.clone()),
+            "distinct {name} ({uri}) collided with an existing artifact"
+        );
+        expected_artifacts += 1;
+        expected_aliases += 1;
+
+        let (_, entry) = run(&db, &["get", &id, "--no-track"], None);
+        assert_eq!(
+            entry["provider"].as_str(),
+            item["provider"].as_str(),
+            "distinct {name}"
+        );
+        assert_eq!(
+            entry["kind"].as_str(),
+            item["kind"].as_str(),
+            "distinct {name}"
+        );
+        assert_eq!(
+            entry["source_external_id"].as_str(),
+            item["external_id"].as_str(),
+            "distinct {name}"
+        );
+    }
+
+    assert_eq!(
+        row_counts(&db),
+        (expected_artifacts, expected_aliases, expected_artifacts)
+    );
+    let (code, doctor) = run(&db, &["doctor"], None);
+    assert_eq!(code, 0);
+    assert_eq!(doctor["healthy"], true);
+    let (code, stats) = run(&db, &["stats"], None);
+    assert_eq!(code, 0);
+    assert_eq!(stats["artifacts"], expected_artifacts);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn local_path_variants_deduplicate_across_restarts_and_distinguish_files() {
+    let dir = std::env::temp_dir().join(format!("artmark-local-paths-{}", Uuid::now_v7()));
+    let work = dir.join("workspace");
+    let nested = work.join("docs");
+    fs::create_dir_all(&nested).unwrap();
+    let db = dir.join("artmark.db");
+
+    let file_a = work.join("spec.md");
+    let file_b = work.join("other.md");
+    fs::write(&file_a, "# Spec\n").unwrap();
+    fs::write(&file_b, "# Other\n").unwrap();
+
+    let run_in = |cwd: &Path, args: &[&str]| -> (i32, Value) {
+        let output = Command::new(env!("CARGO_BIN_EXE_artmark"))
+            .current_dir(cwd)
+            .args(["--database", db.to_str().unwrap()])
+            .args(args)
+            .arg("--json")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(!stdout.is_empty(), "empty stdout; stderr: {stderr}");
+        (
+            output.status.code().unwrap(),
+            serde_json::from_str(&stdout).unwrap(),
+        )
+    };
+
+    let file_a_url = url::Url::from_file_path(&file_a).unwrap().to_string();
+    let dir_url = url::Url::from_directory_path(&nested).unwrap().to_string();
+
+    let (code, first) = run_in(&work, &["add", "spec.md"]);
+    assert_eq!(code, 0);
+    let id_a = first["id"].as_str().unwrap().to_owned();
+
+    for (cwd, variant) in [
+        (work.as_path(), "./spec.md"),
+        (work.as_path(), "docs/../spec.md"),
+        (nested.as_path(), "../spec.md"),
+        (dir.as_path(), file_a.to_str().unwrap()),
+        (dir.as_path(), file_a_url.as_str()),
+    ] {
+        let (code, dup) = run_in(cwd, &["add", variant]);
+        assert_eq!(code, 0, "variant {variant} failed");
+        assert_eq!(
+            dup["id"].as_str().unwrap(),
+            id_a,
+            "variant {variant} did not deduplicate"
+        );
+    }
+
+    let (_, entry_a) = run_in(&dir, &["get", &id_a, "--no-track"]);
+    assert_eq!(entry_a["provider"], "filesystem");
+    assert_eq!(entry_a["kind"], "local_file");
+    assert_eq!(entry_a["aliases"].as_array().unwrap().len(), 6);
+
+    // Distinct local file gets a distinct record.
+    let (code, second) = run_in(&work, &["add", "other.md"]);
+    assert_eq!(code, 0);
+    assert_ne!(second["id"].as_str().unwrap(), id_a);
+
+    // Directory path with and without trailing slash and file:// URI deduplicates.
+    let nested_str = nested.to_str().unwrap().to_owned();
+    let nested_slash = format!("{nested_str}{}", std::path::MAIN_SEPARATOR);
+    let (code, dir_first) = run_in(&dir, &["add", &nested_str]);
+    assert_eq!(code, 0);
+    let dir_id = dir_first["id"].as_str().unwrap().to_owned();
+    for variant in [nested_slash.as_str(), dir_url.as_str()] {
+        let (code, dup) = run_in(&dir, &["add", variant]);
+        assert_eq!(code, 0);
+        assert_eq!(dup["id"].as_str().unwrap(), dir_id);
+    }
+    let (_, dir_entry) = run_in(&dir, &["get", &dir_id, "--no-track"]);
+    assert_eq!(dir_entry["provider"], "filesystem");
+    assert_eq!(dir_entry["kind"], "local_directory");
+
+    assert_eq!(row_counts(&db), (3, 10, 3));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn upgrading_populated_v04_database_reconciles_jira_and_slack_keys_and_aliases() {
+    let dir = std::env::temp_dir().join(format!("artmark-v2-reconcile-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA foreign_keys=ON;
+             CREATE TABLE artifacts (
+               id TEXT PRIMARY KEY,
+               canonical_key TEXT NOT NULL UNIQUE,
+               kind TEXT NOT NULL,
+               provider TEXT,
+               state TEXT NOT NULL CHECK(state IN ('registered','indexed','unreachable')),
+               primary_uri TEXT,
+               title TEXT,
+               summary TEXT,
+               search_text TEXT,
+               source_external_id TEXT,
+               source_revision TEXT,
+               source_updated_at TEXT,
+               retrieval_json TEXT,
+               source_metadata_json TEXT,
+               catalog_metadata_json TEXT,
+               provenance_json TEXT,
+               is_explicitly_saved INTEGER NOT NULL DEFAULT 0,
+               access_count INTEGER NOT NULL DEFAULT 0,
+               last_accessed_at TEXT,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               last_seen_at TEXT NOT NULL,
+               last_indexed_at TEXT
+             );
+             CREATE TABLE aliases (
+               uri TEXT PRIMARY KEY,
+               artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+               first_seen_at TEXT NOT NULL,
+               last_seen_at TEXT NOT NULL
+             );
+             CREATE TABLE topics (
+               artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+               topic TEXT NOT NULL,
+               PRIMARY KEY(artifact_id, topic)
+             );
+             CREATE TABLE entities (
+               artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+               entity TEXT NOT NULL,
+               PRIMARY KEY(artifact_id, entity)
+             );
+             CREATE TABLE tags (
+               artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+               tag TEXT NOT NULL,
+               PRIMARY KEY(artifact_id, tag)
+             );
+             CREATE VIRTUAL TABLE artifact_fts USING fts5(
+               artifact_id UNINDEXED, title, summary, search_text, topics, entities, tags,
+               tokenize = 'porter unicode61'
+             );
+             CREATE INDEX aliases_artifact_id ON aliases(artifact_id);
+             CREATE INDEX artifacts_recent ON artifacts(last_seen_at DESC);
+             CREATE INDEX artifacts_accessed ON artifacts(access_count DESC, last_accessed_at DESC);
+
+             -- Legacy v0.4 Jira issue saved as web_page (indexed) + duplicate variant (registered).
+             INSERT INTO artifacts (
+               id, canonical_key, kind, provider, state, primary_uri, title, summary, search_text,
+               source_external_id, is_explicitly_saved, access_count, last_accessed_at,
+               created_at, updated_at, last_seen_at, last_indexed_at
+             ) VALUES (
+               'art_jira_indexed',
+               'web:https://acme.atlassian.net/browse/ENG-123',
+               'web_page',
+               'web',
+               'indexed',
+               'https://acme.atlassian.net/browse/ENG-123',
+               'Webhook Retry Storm',
+               'Jira ticket tracking webhook retry storms',
+               'webhook retries backoff jitter jira ticket',
+               NULL,
+               1,
+               2,
+               '2026-10-01T00:00:00.000Z',
+               '2026-09-01T00:00:00.000Z',
+               '2026-09-02T00:00:00.000Z',
+               '2026-09-02T00:00:00.000Z',
+               '2026-09-02T00:00:00.000Z'
+             ), (
+               'art_jira_dup',
+               'web:https://acme.atlassian.net/issues/ENG-123',
+               'web_page',
+               'web',
+               'registered',
+               'https://acme.atlassian.net/issues/ENG-123',
+               NULL,
+               NULL,
+               NULL,
+               NULL,
+               0,
+               1,
+               '2026-10-02T00:00:00.000Z',
+               '2026-09-03T00:00:00.000Z',
+               '2026-09-03T00:00:00.000Z',
+               '2026-09-03T00:00:00.000Z',
+               NULL
+             );
+             INSERT INTO aliases VALUES
+               ('https://acme.atlassian.net/browse/ENG-123', 'art_jira_indexed', '2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z'),
+               ('https://acme.atlassian.net/issues/ENG-123', 'art_jira_dup', '2026-09-03T00:00:00.000Z', '2026-09-03T00:00:00.000Z');
+             INSERT INTO topics VALUES ('art_jira_indexed', 'webhooks');
+
+             -- Legacy v0.4 Slack thread root (indexed) + reply URL stored separately (registered).
+             INSERT INTO artifacts (
+               id, canonical_key, kind, provider, state, primary_uri, title, summary, search_text,
+               source_external_id, is_explicitly_saved, access_count, last_accessed_at,
+               created_at, updated_at, last_seen_at, last_indexed_at
+             ) VALUES (
+               'art_slack_root',
+               'slack:thread:acme.slack.com:C01234567:p1700000000123456',
+               'slack_thread',
+               'slack',
+               'indexed',
+               'https://acme.slack.com/archives/C01234567/p1700000000123456',
+               'Outage Thread',
+               'Incident thread for latency spike',
+               'slack outage latency p99 mitigation',
+               'p1700000000123456',
+               1,
+               1,
+               '2026-10-01T00:00:00.000Z',
+               '2026-09-10T00:00:00.000Z',
+               '2026-09-10T00:00:00.000Z',
+               '2026-09-10T00:00:00.000Z',
+               '2026-09-10T00:00:00.000Z'
+             ), (
+               'art_slack_reply',
+               'slack:thread:acme.slack.com:C01234567:p1700000000999999',
+               'slack_thread',
+               'slack',
+               'registered',
+               'https://acme.slack.com/archives/C01234567/p1700000000999999?thread_ts=1700000000.123456&cid=C01234567',
+               NULL,
+               NULL,
+               NULL,
+               'p1700000000999999',
+               0,
+               0,
+               NULL,
+               '2026-09-11T00:00:00.000Z',
+               '2026-09-11T00:00:00.000Z',
+               '2026-09-11T00:00:00.000Z',
+               NULL
+             );
+             INSERT INTO aliases VALUES
+               ('https://acme.slack.com/archives/C01234567/p1700000000123456', 'art_slack_root', '2026-09-10T00:00:00.000Z', '2026-09-10T00:00:00.000Z'),
+               ('https://acme.slack.com/archives/C01234567/p1700000000999999?thread_ts=1700000000.123456&cid=C01234567', 'art_slack_reply', '2026-09-11T00:00:00.000Z', '2026-09-11T00:00:00.000Z');
+
+             INSERT INTO artifact_fts VALUES
+               ('art_jira_indexed', 'Webhook Retry Storm', 'Jira ticket tracking webhook retry storms', 'webhook retries backoff jitter jira ticket', 'webhooks', '', ''),
+               ('art_jira_dup', NULL, NULL, NULL, '', '', ''),
+               ('art_slack_root', 'Outage Thread', 'Incident thread for latency spike', 'slack outage latency p99 mitigation', '', '', ''),
+               ('art_slack_reply', NULL, NULL, NULL, '', '', '');
+             PRAGMA user_version=2;",
+        )
+        .unwrap();
+    }
+
+    let (code, doctor) = run(&db, &["doctor"], None);
+    assert_eq!(code, 0);
+    assert_eq!(doctor["healthy"], true);
+    assert_eq!(doctor["schema_version"], 3);
+    assert!(dir.join("artmark.db.v2.bak").is_file());
+    assert_eq!(row_counts(&db), (2, 4, 2));
+
+    // Preserved Jira record keeps indexed ID, catalog, merged access_count, and both aliases.
+    let (code, jira) = run(&db, &["get", "art_jira_indexed", "--no-track"], None);
+    assert_eq!(code, 0);
+    assert_eq!(
+        jira["canonical_key"],
+        "jira:issue:acme.atlassian.net:ENG-123"
+    );
+    assert_eq!(jira["provider"], "jira");
+    assert_eq!(jira["kind"], "jira_issue");
+    assert_eq!(jira["source_external_id"], "ENG-123");
+    assert_eq!(jira["state"], "indexed");
+    assert_eq!(jira["access_count"], 3);
+    assert_eq!(jira["aliases"].as_array().unwrap().len(), 2);
+
+    // Re-adding saved URL or adding a new board variant deduplicates cleanly without alias errors.
+    let (code, readded) = run(
+        &db,
+        &["add", "https://acme.atlassian.net/browse/ENG-123"],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(readded["id"], "art_jira_indexed");
+
+    let (code, variant) = run(
+        &db,
+        &[
+            "add",
+            "https://acme.atlassian.net/jira/software/projects/ENG/boards/1?selectedIssue=ENG-123",
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(variant["id"], "art_jira_indexed");
+
+    // Re-adding Slack reply URL deduplicates onto the preserved root thread record.
+    let (code, slack_readded) = run(
+        &db,
+        &[
+            "add",
+            "https://acme.slack.com/archives/C01234567/p1700000000999999?thread_ts=1700000000.123456&cid=C01234567",
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(slack_readded["id"], "art_slack_root");
+
+    let (code, found) = run(&db, &["search", "webhook retries"], None);
+    assert_eq!(code, 0);
+    assert_eq!(found["results"].as_array().unwrap().len(), 1);
+    assert_eq!(found["results"][0]["id"], "art_jira_indexed");
 
     fs::remove_dir_all(dir).unwrap();
 }

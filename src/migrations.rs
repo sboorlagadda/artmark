@@ -1,13 +1,15 @@
+use crate::canonical::{Identity, identify};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 2;
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Clone, Copy)]
 pub struct Migration {
@@ -26,6 +28,11 @@ const MIGRATIONS: &[Migration] = &[
         target_version: 2,
         name: "porter_fts_and_access_tracking",
         apply: migrate_to_v2,
+    },
+    Migration {
+        target_version: 3,
+        name: "reconcile_canonical_keys",
+        apply: migrate_to_v3,
     },
 ];
 
@@ -333,6 +340,280 @@ fn migrate_to_v2(tx: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
+struct LegacyArtifactRow {
+    id: String,
+    canonical_key: String,
+    kind: String,
+    provider: Option<String>,
+    state: String,
+    primary_uri: Option<String>,
+    title: Option<String>,
+    summary: Option<String>,
+    search_text: Option<String>,
+    source_external_id: Option<String>,
+    source_revision: Option<String>,
+    source_updated_at: Option<String>,
+    retrieval_json: Option<String>,
+    source_metadata_json: Option<String>,
+    catalog_metadata_json: Option<String>,
+    provenance_json: Option<String>,
+    is_explicitly_saved: bool,
+    access_count: i64,
+    last_accessed_at: Option<String>,
+    created_at: String,
+    updated_at: String,
+    last_seen_at: String,
+    last_indexed_at: Option<String>,
+}
+
+fn migrate_to_v3(tx: &Transaction<'_>) -> Result<()> {
+    let rows = {
+        let mut stmt = tx.prepare(
+            "SELECT id, canonical_key, kind, provider, state, primary_uri, title, summary,
+                    search_text, source_external_id, source_revision, source_updated_at,
+                    retrieval_json, source_metadata_json, catalog_metadata_json, provenance_json,
+                    is_explicitly_saved, access_count, last_accessed_at,
+                    created_at, updated_at, last_seen_at, last_indexed_at
+             FROM artifacts
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        stmt.query_map([], |row| {
+            Ok(LegacyArtifactRow {
+                id: row.get(0)?,
+                canonical_key: row.get(1)?,
+                kind: row.get(2)?,
+                provider: row.get(3)?,
+                state: row.get(4)?,
+                primary_uri: row.get(5)?,
+                title: row.get(6)?,
+                summary: row.get(7)?,
+                search_text: row.get(8)?,
+                source_external_id: row.get(9)?,
+                source_revision: row.get(10)?,
+                source_updated_at: row.get(11)?,
+                retrieval_json: row.get(12)?,
+                source_metadata_json: row.get(13)?,
+                catalog_metadata_json: row.get(14)?,
+                provenance_json: row.get(15)?,
+                is_explicitly_saved: row.get(16)?,
+                access_count: row.get(17)?,
+                last_accessed_at: row.get(18)?,
+                created_at: row.get(19)?,
+                updated_at: row.get(20)?,
+                last_seen_at: row.get(21)?,
+                last_indexed_at: row.get(22)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut groups: BTreeMap<String, (Identity, Vec<LegacyArtifactRow>)> = BTreeMap::new();
+    for row in rows {
+        let locator = match row.primary_uri.as_deref() {
+            Some(uri) if !uri.trim().is_empty() => Some(uri.to_owned()),
+            _ => tx
+                .query_row(
+                    "SELECT uri FROM aliases WHERE artifact_id=?1 ORDER BY first_seen_at ASC, uri ASC LIMIT 1",
+                    [&row.id],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?,
+        };
+        let Some(uri) = locator else {
+            continue;
+        };
+        let Ok(identity) = identify(&uri) else {
+            continue;
+        };
+        groups
+            .entry(identity.canonical_key.clone())
+            .or_insert_with(|| (identity, Vec::new()))
+            .1
+            .push(row);
+    }
+
+    let mut changed = false;
+    let mut pending_key_updates: Vec<(String, Identity)> = Vec::new();
+
+    for (target_key, (identity, mut members)) in groups {
+        if members.len() == 1 {
+            let row = &members[0];
+            if row.canonical_key != target_key
+                || row.kind != identity.kind
+                || row.provider != identity.provider
+                || row.source_external_id != identity.external_id
+            {
+                pending_key_updates.push((row.id.clone(), identity));
+                changed = true;
+            }
+            continue;
+        }
+
+        // Choose a deterministic winner that preserves indexed/explicit catalog work.
+        members.sort_by(|a, b| {
+            (
+                a.state != "indexed",
+                !a.is_explicitly_saved,
+                a.canonical_key != target_key,
+                a.created_at.as_str(),
+                a.id.as_str(),
+            )
+                .cmp(&(
+                    b.state != "indexed",
+                    !b.is_explicitly_saved,
+                    b.canonical_key != target_key,
+                    b.created_at.as_str(),
+                    b.id.as_str(),
+                ))
+        });
+
+        let mut winner = members.remove(0);
+        for loser in members {
+            if winner.state != "indexed" && loser.state == "indexed" {
+                winner.state = loser.state;
+            }
+            if winner.title.is_none() {
+                winner.title = loser.title;
+            }
+            if winner.summary.is_none() {
+                winner.summary = loser.summary;
+            }
+            if winner.search_text.is_none() {
+                winner.search_text = loser.search_text;
+            }
+            if winner.source_revision.is_none() {
+                winner.source_revision = loser.source_revision;
+            }
+            if winner.source_updated_at.is_none() {
+                winner.source_updated_at = loser.source_updated_at;
+            }
+            if winner.retrieval_json.is_none() {
+                winner.retrieval_json = loser.retrieval_json;
+            }
+            if winner.source_metadata_json.is_none() {
+                winner.source_metadata_json = loser.source_metadata_json;
+            }
+            if winner.catalog_metadata_json.is_none() {
+                winner.catalog_metadata_json = loser.catalog_metadata_json;
+            }
+            if winner.provenance_json.is_none() {
+                winner.provenance_json = loser.provenance_json;
+            }
+            winner.is_explicitly_saved |= loser.is_explicitly_saved;
+            winner.access_count += loser.access_count;
+            winner.last_accessed_at = max_opt_str(winner.last_accessed_at, loser.last_accessed_at);
+            if loser.created_at < winner.created_at {
+                winner.created_at = loser.created_at;
+            }
+            if loser.updated_at > winner.updated_at {
+                winner.updated_at = loser.updated_at;
+            }
+            if loser.last_seen_at > winner.last_seen_at {
+                winner.last_seen_at = loser.last_seen_at;
+            }
+            winner.last_indexed_at = max_opt_str(winner.last_indexed_at, loser.last_indexed_at);
+
+            tx.execute(
+                "UPDATE aliases SET artifact_id=?1 WHERE artifact_id=?2",
+                params![winner.id, loser.id],
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO topics(artifact_id, topic)
+                 SELECT ?1, topic FROM topics WHERE artifact_id=?2",
+                params![winner.id, loser.id],
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO entities(artifact_id, entity)
+                 SELECT ?1, entity FROM entities WHERE artifact_id=?2",
+                params![winner.id, loser.id],
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO tags(artifact_id, tag)
+                 SELECT ?1, tag FROM tags WHERE artifact_id=?2",
+                params![winner.id, loser.id],
+            )?;
+            tx.execute("DELETE FROM artifact_fts WHERE artifact_id=?1", [&loser.id])?;
+            tx.execute("DELETE FROM artifacts WHERE id=?1", [&loser.id])?;
+        }
+
+        tx.execute(
+            "UPDATE artifacts
+             SET state=?2, title=?3, summary=?4, search_text=?5,
+                 source_revision=?6, source_updated_at=?7,
+                 retrieval_json=?8, source_metadata_json=?9,
+                 catalog_metadata_json=?10, provenance_json=?11,
+                 is_explicitly_saved=?12, access_count=?13,
+                 last_accessed_at=?14, created_at=?15, updated_at=?16,
+                 last_seen_at=?17, last_indexed_at=?18
+             WHERE id=?1",
+            params![
+                winner.id,
+                winner.state,
+                winner.title,
+                winner.summary,
+                winner.search_text,
+                winner.source_revision,
+                winner.source_updated_at,
+                winner.retrieval_json,
+                winner.source_metadata_json,
+                winner.catalog_metadata_json,
+                winner.provenance_json,
+                winner.is_explicitly_saved,
+                winner.access_count,
+                winner.last_accessed_at,
+                winner.created_at,
+                winner.updated_at,
+                winner.last_seen_at,
+                winner.last_indexed_at,
+            ],
+        )?;
+        pending_key_updates.push((winner.id, identity));
+        changed = true;
+    }
+
+    // Two-phase canonical_key update avoids transient UNIQUE collisions if any
+    // rows swap keys.
+    for (index, (id, _)) in pending_key_updates.iter().enumerate() {
+        tx.execute(
+            "UPDATE artifacts SET canonical_key=?2 WHERE id=?1",
+            params![id, format!("__migrating_v3__:{index}:{id}")],
+        )?;
+    }
+    for (id, identity) in pending_key_updates {
+        tx.execute(
+            "UPDATE artifacts
+             SET canonical_key=?2, kind=?3, provider=?4, source_external_id=?5
+             WHERE id=?1",
+            params![
+                id,
+                identity.canonical_key,
+                identity.kind,
+                identity.provider,
+                identity.external_id,
+            ],
+        )?;
+    }
+
+    if changed {
+        tx.execute("DELETE FROM artifact_fts", [])?;
+        rebuild_all_fts(tx)?;
+    }
+    Ok(())
+}
+
+fn max_opt_str(a: Option<String>, b: Option<String>) -> Option<String> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if a >= b { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
 fn rebuild_all_fts(tx: &Transaction<'_>) -> Result<()> {
     let rows = {
         let mut stmt = tx.prepare("SELECT id, title, summary, search_text FROM artifacts")?;
@@ -480,7 +761,7 @@ mod tests {
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
 
         let backup = append_suffix(&path, ".v1.bak");
         assert!(
@@ -571,7 +852,7 @@ mod tests {
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
 
         drop(conn);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
