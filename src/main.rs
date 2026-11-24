@@ -1,5 +1,8 @@
 use anyhow::{Context, Result, anyhow};
-use artmark::{ArtifactState, DoctorReport, Error, IndexInput, Registry, SearchFilters};
+use artmark::{
+    ArtifactState, DoctorReport, Error, IndexInput, Registry, SearchFilters,
+    workspace::{self, AgentSetupReport},
+};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
@@ -102,23 +105,6 @@ enum ContextCommand {
     Init,
 }
 
-const CONTEXT_START: &str = "<!-- artmark:context:start -->";
-const CONTEXT_END: &str = "<!-- artmark:context:end -->";
-const CONTEXT_GUIDANCE: &str = r#"<!-- artmark:context:start -->
-## Using artmark
-
-artmark is a local catalog of artifact pointers and retrieval hints. The original source remains authoritative; artmark does not fetch providers or store source documents.
-
-- Do not automatically register every URL or file path the user pastes.
-- When the user explicitly asks to save, remember, bookmark, or artmark a durable artifact, inspect the source with an available tool and save it with a search card in one step using `artmark add <uri> --explicit --json-input - --json`. If the source cannot be inspected, fall back to `artmark add <uri> --explicit --json` (with `--title` when known) and tell the user it was saved as a pointer only and is not searchable by topic until indexed.
-- Keep source facts separate from your summary, and do not copy source content or secrets.
-- Whenever the task requires identifying a durable artifact from a description without an exact locator, use `artmark search <query> --json` before provider search, even if the provider is named. Inspect likely matches with `artmark get <id> --json`, then retrieve current details through the provider.
-- At the end of a substantive task, briefly ask whether the user wants to remember any notable durable artifacts read during the task (whether user-supplied or discovered) that are not already indexed. Save and index only those the user approves.
-- For a confirmed supersession relationship, keep a brief direct predecessor or successor note in each registered artifact's summary. Do not use special relation tags or accumulate version history.
-
-<!-- artmark:context:end -->
-"#;
-
 fn main() {
     if let Err((code, error)) = run() {
         eprintln!("artmark: {error:#}");
@@ -128,34 +114,36 @@ fn main() {
 
 type Outcome<T> = std::result::Result<T, (i32, anyhow::Error)>;
 
+fn open_registry(database: Option<PathBuf>) -> Outcome<Registry> {
+    let path = match database {
+        Some(path) => path,
+        None => workspace::default_database_path(workspace::current_home_dir().as_deref())
+            .map_err(input_error)?,
+    };
+    Registry::open(&path).map_err(registry_error)
+}
+
 fn run() -> Outcome<()> {
     let cli = Cli::parse();
-    if matches!(
-        &cli.command,
-        Command::Context {
-            command: ContextCommand::Init
-        }
-    ) {
-        let report = init_context().map_err(input_error)?;
-        if cli.json {
-            emit(&report);
-        } else {
-            println!("{}", serde_json::to_string_pretty(&report).unwrap());
-        }
-        return Ok(());
-    }
-    let path = match cli.database {
-        Some(path) => path,
-        None => default_database().map_err(input_error)?,
-    };
-    let mut db = Registry::open(&path).map_err(registry_error)?;
     match cli.command {
+        Command::Context {
+            command: ContextCommand::Init,
+        } => {
+            let cwd = std::env::current_dir().map_err(input_error)?;
+            let report = workspace::init_context_in(&cwd).map_err(input_error)?;
+            if cli.json {
+                emit(&report);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            }
+        }
         Command::Add {
             uri,
             title,
             explicit,
             input,
         } => {
+            let mut db = open_registry(cli.database)?;
             let entry = match input {
                 Some(path) => {
                     let content = read_input(&path).map_err(input_error)?;
@@ -183,6 +171,7 @@ fn run() -> Outcome<()> {
             );
         }
         Command::Get { artifact, no_track } => {
+            let mut db = open_registry(cli.database)?;
             let artifact = db.get(&artifact, !no_track).map_err(registry_error)?;
             if cli.json {
                 emit(&artifact);
@@ -197,6 +186,7 @@ fn run() -> Outcome<()> {
             }
         }
         Command::Index { artifact, input } => {
+            let mut db = open_registry(cli.database)?;
             let content = read_input(&input).map_err(input_error)?;
             let entry: IndexInput = serde_json::from_str(&content).map_err(input_error)?;
             let artifact = db.index(&artifact, entry).map_err(registry_error)?;
@@ -218,6 +208,7 @@ fn run() -> Outcome<()> {
             seen_after,
             indexed_after,
         } => {
+            let db = open_registry(cli.database)?;
             let state = state
                 .as_deref()
                 .map(ArtifactState::from_str)
@@ -254,6 +245,7 @@ fn run() -> Outcome<()> {
             state,
             provider,
         } => {
+            let db = open_registry(cli.database)?;
             let state = state
                 .as_deref()
                 .map(ArtifactState::from_str)
@@ -278,6 +270,7 @@ fn run() -> Outcome<()> {
             }
         }
         Command::Forget { artifact } => {
+            let mut db = open_registry(cli.database)?;
             db.forget(&artifact).map_err(registry_error)?;
             if cli.json {
                 emit(&json!({"forgotten": true}));
@@ -286,6 +279,7 @@ fn run() -> Outcome<()> {
             }
         }
         Command::Reindex => {
+            let mut db = open_registry(cli.database)?;
             let count = db.reindex().map_err(registry_error)?;
             if cli.json {
                 emit(&json!({"reindexed": count}));
@@ -294,11 +288,12 @@ fn run() -> Outcome<()> {
             }
         }
         Command::Doctor => {
+            let db = open_registry(cli.database)?;
             let database = db.doctor().map_err(registry_error)?;
             let healthy = database.healthy;
             let report = CliDoctorReport {
                 database,
-                agent_setup: agent_setup_report(),
+                agent_setup: workspace::inspect_current_agent_setup(),
             };
             if cli.json {
                 emit(&report);
@@ -310,15 +305,13 @@ fn run() -> Outcome<()> {
             }
         }
         Command::Stats => {
+            let db = open_registry(cli.database)?;
             let stats = db.stats().map_err(registry_error)?;
             if cli.json {
                 emit(&stats);
             } else {
                 println!("{}", serde_json::to_string_pretty(&stats).unwrap());
             }
-        }
-        Command::Context { .. } => {
-            unreachable!("context commands are handled before opening the database")
         }
     }
     Ok(())
@@ -328,144 +321,7 @@ fn run() -> Outcome<()> {
 struct CliDoctorReport {
     #[serde(flatten)]
     database: DoctorReport,
-    agent_setup: serde_json::Value,
-}
-
-fn init_context() -> Result<serde_json::Value> {
-    let agents_path = std::env::current_dir()?.join("AGENTS.md");
-    if std::fs::symlink_metadata(&agents_path)
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
-    {
-        anyhow::bail!(
-            "{} is a symbolic link; refusing to edit it",
-            agents_path.display()
-        );
-    }
-    let (original, existed) = match std::fs::read_to_string(&agents_path) {
-        Ok(contents) => (contents, true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (String::new(), false),
-        Err(error) => {
-            return Err(error).with_context(|| format!("cannot read {}", agents_path.display()));
-        }
-    };
-
-    let newline = if original.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
-    let section = if newline == "\n" {
-        CONTEXT_GUIDANCE.to_owned()
-    } else {
-        CONTEXT_GUIDANCE.replace('\n', newline)
-    };
-    let start_count = original.matches(CONTEXT_START).count();
-    let end_count = original.matches(CONTEXT_END).count();
-    let mut action = if existed { "updated" } else { "created" };
-
-    let updated = if start_count == 0 && end_count == 0 {
-        let mut next = original.clone();
-        if !next.is_empty() {
-            let blank_line = format!("{newline}{newline}");
-            if !next.ends_with(newline) {
-                next.push_str(newline);
-            }
-            if !next.ends_with(&blank_line) {
-                next.push_str(newline);
-            }
-        }
-        next.push_str(&section);
-        next
-    } else if start_count == 1 && end_count == 1 {
-        let start = original.find(CONTEXT_START).unwrap();
-        let end = original.find(CONTEXT_END).unwrap();
-        if start >= end
-            || !marker_is_on_own_line(&original, start, CONTEXT_START)
-            || !marker_is_on_own_line(&original, end, CONTEXT_END)
-        {
-            anyhow::bail!(
-                "{} has malformed artmark context markers; repair or remove the markers before retrying",
-                agents_path.display()
-            );
-        }
-        let after_end = end + CONTEXT_END.len();
-        let suffix = &original[after_end..];
-        let section = section.strip_suffix(newline).unwrap_or(&section);
-        let mut next = String::with_capacity(original.len() + section.len());
-        next.push_str(&original[..start]);
-        next.push_str(section);
-        if suffix.is_empty() {
-            next.push_str(newline);
-        }
-        next.push_str(suffix);
-        next
-    } else {
-        anyhow::bail!(
-            "{} has an incomplete or duplicated artmark context marker pair; repair or remove the markers before retrying",
-            agents_path.display()
-        );
-    };
-
-    if updated == original {
-        action = "unchanged";
-    } else {
-        std::fs::write(&agents_path, updated)
-            .with_context(|| format!("cannot write {}", agents_path.display()))?;
-    }
-
-    Ok(json!({
-        "path": agents_path.display().to_string(),
-        "action": action
-    }))
-}
-
-fn marker_is_on_own_line(contents: &str, position: usize, marker: &str) -> bool {
-    let before = &contents[..position];
-    let after = &contents[position + marker.len()..];
-    (position == 0 || before.ends_with('\n'))
-        && (after.is_empty() || after.starts_with('\n') || after.starts_with("\r\n"))
-}
-
-fn agent_setup_report() -> serde_json::Value {
-    let skill_path = codex_home().map(|home| home.join("skills/artmark/SKILL.md"));
-    let installed = skill_path.as_ref().is_some_and(|path| path.is_file());
-    let skill_path = skill_path.map(|path| path.display().to_string());
-    let suggestions = if installed {
-        Vec::new()
-    } else {
-        vec![
-            "Install the artmark Codex skill for the full agent workflow.".to_owned(),
-            "Run artmark context init to add project-local artmark guidance to AGENTS.md."
-                .to_owned(),
-        ]
-    };
-    json!({
-        "codex_skill_installed": installed,
-        "codex_skill_path": skill_path,
-        "suggestions": suggestions
-    })
-}
-
-fn codex_home() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("CODEX_HOME")
-        && !path.is_empty()
-    {
-        return Some(PathBuf::from(path));
-    }
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
-    #[cfg(not(windows))]
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    home.map(|path| path.join(".codex"))
-}
-
-fn default_database() -> Result<PathBuf> {
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
-    #[cfg(not(windows))]
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let home = home.context("home directory is unavailable; set ARTMARK_DB or --database")?;
-    Ok(home.join(".artmark/artmark.db"))
+    agent_setup: AgentSetupReport,
 }
 
 fn read_input(path: &str) -> Result<String> {
