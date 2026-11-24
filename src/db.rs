@@ -1,14 +1,79 @@
 use crate::canonical::{Identity, identify};
 use crate::migrations::{self, CURRENT_SCHEMA_VERSION};
-use crate::model::{Artifact, IndexInput, SearchCard, SearchFilters};
-use anyhow::{Context, Result, bail};
+use crate::model::{Artifact, ArtifactState, IndexInput, SearchCard, SearchFilters};
+use anyhow::{Context, bail};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
+
+#[derive(Debug)]
+pub enum Error {
+    InvalidInput(anyhow::Error),
+    EmptyQuery,
+    NotFound { key: String },
+    Database(anyhow::Error),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidInput(err) | Self::Database(err) => fmt::Display::fmt(err, f),
+            Self::EmptyQuery => f.write_str("search query cannot be empty"),
+            Self::NotFound { .. } => f.write_str("artifact not found"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidInput(err) | Self::Database(err) => err.source(),
+            Self::EmptyQuery | Self::NotFound { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DoctorReport {
+    pub healthy: bool,
+    pub sqlite_integrity: String,
+    pub foreign_key_integrity: bool,
+    pub fts_integrity: bool,
+    pub schema_version: i64,
+    pub artifacts: i64,
+    pub fts_rows: i64,
+    pub missing_fts: i64,
+    pub indexed_missing_search_text: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TopAccessedArtifact {
+    pub id: String,
+    pub title: Option<String>,
+    pub canonical_key: String,
+    pub provider: Option<String>,
+    pub access_count: i64,
+    pub last_accessed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StatsReport {
+    pub artifacts: i64,
+    pub states: BTreeMap<String, i64>,
+    pub providers: BTreeMap<String, i64>,
+    pub total_accesses: i64,
+    pub accessed_artifacts: i64,
+    pub top_accessed: Vec<TopAccessedArtifact>,
+    pub semantic_search: bool,
+}
 
 const FTS_BM25_WEIGHTS: &str = "bm25(artifact_fts, 0.0, 8.0, 3.0, 1.5, 2.5, 2.5, 1.5)";
 
@@ -29,6 +94,14 @@ pub struct Registry {
 
 impl Registry {
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_disk(path).map_err(Error::Database)
+    }
+
+    pub fn open_in_memory() -> Result<Self> {
+        Self::open_memory().map_err(Error::Database)
+    }
+
+    fn open_disk(path: &Path) -> anyhow::Result<Self> {
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -54,71 +127,100 @@ impl Registry {
         Ok(Self { conn })
     }
 
+    fn open_memory() -> anyhow::Result<Self> {
+        let mut conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+        )?;
+        migrations::migrate(&mut conn, Path::new(":memory:"))?;
+        Ok(Self { conn })
+    }
+
     pub fn add(
         &mut self,
         uri: &str,
         title: Option<&str>,
         explicitly_saved: bool,
+        index: Option<IndexInput>,
     ) -> Result<Artifact> {
-        let identity = identify(uri)?;
-        let now = timestamp();
-        let tx = self.conn.transaction()?;
-        let id = upsert_artifact(&tx, &identity, uri, title, explicitly_saved, &now)?;
-        update_fts(&tx, &id)?;
-        tx.commit()?;
-        self.get(&id)?.context("new artifact disappeared")
+        let identity = identify(uri).map_err(Error::InvalidInput)?;
+        if let Some(ref input) = index {
+            input.validate().map_err(Error::InvalidInput)?;
+        }
+        self.add_tx(&identity, uri, title, explicitly_saved, index)
+            .map_err(Error::Database)
     }
 
-    pub fn add_and_index(
+    fn add_tx(
         &mut self,
+        identity: &Identity,
         uri: &str,
         title: Option<&str>,
         explicitly_saved: bool,
-        input: IndexInput,
-    ) -> Result<Artifact> {
-        let identity = identify(uri)?;
-        input.validate()?;
+        index: Option<IndexInput>,
+    ) -> anyhow::Result<Artifact> {
         let now = timestamp();
         let tx = self.conn.transaction()?;
-        let id = upsert_artifact(&tx, &identity, uri, title, explicitly_saved, &now)?;
-        let current = load_artifact(&tx, &id)?;
-        apply_index(&tx, &current, input, &now)?;
-        tx.commit()?;
-        self.get(&id)?.context("new artifact disappeared")
-    }
-
-    pub fn get(&self, key: &str) -> Result<Option<Artifact>> {
-        let Some(id) = self.resolve_id(key)? else {
-            return Ok(None);
-        };
-        load_artifact(&self.conn, &id).map(Some)
-    }
-
-    pub fn get_tracked(&mut self, key: &str, track: bool) -> Result<Option<Artifact>> {
-        let Some(id) = self.resolve_id(key)? else {
-            return Ok(None);
-        };
-        if track {
-            let now = timestamp();
-            let tx = self.conn.transaction()?;
-            tx.execute(
-                "UPDATE artifacts
-                 SET access_count = access_count + 1,
-                     last_accessed_at = ?2
-                 WHERE id = ?1",
-                params![id, now],
-            )?;
-            tx.commit()?;
+        let id = upsert_artifact(&tx, identity, uri, title, explicitly_saved, &now)?;
+        if let Some(input) = index {
+            let current = load_artifact(&tx, &id)?;
+            apply_index(&tx, &current, input, &now)?;
+        } else {
+            update_fts(&tx, &id)?;
         }
+        tx.commit()?;
+        self.get_optional(&id)?.context("new artifact disappeared")
+    }
+
+    pub fn get(&mut self, key: &str, track_access: bool) -> Result<Artifact> {
+        let Some(id) = self.resolve_id(key).map_err(Error::Database)? else {
+            return Err(Error::NotFound {
+                key: key.to_owned(),
+            });
+        };
+        if track_access {
+            self.record_access(&id).map_err(Error::Database)?;
+        }
+        load_artifact(&self.conn, &id).map_err(Error::Database)
+    }
+
+    fn record_access(&mut self, id: &str) -> anyhow::Result<()> {
+        let now = timestamp();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE artifacts
+             SET access_count = access_count + 1,
+                 last_accessed_at = ?2
+             WHERE id = ?1",
+            params![id, now],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn get_optional(&self, key: &str) -> anyhow::Result<Option<Artifact>> {
+        let Some(id) = self.resolve_id(key)? else {
+            return Ok(None);
+        };
         load_artifact(&self.conn, &id).map(Some)
     }
 
     pub fn recent(
         &self,
         limit: usize,
-        state: Option<&str>,
+        state: Option<ArtifactState>,
         provider: Option<&str>,
     ) -> Result<Vec<Artifact>> {
+        self.recent_inner(limit, state, provider)
+            .map_err(Error::Database)
+    }
+
+    fn recent_inner(
+        &self,
+        limit: usize,
+        state: Option<ArtifactState>,
+        provider: Option<&str>,
+    ) -> anyhow::Result<Vec<Artifact>> {
         let mut stmt = self.conn.prepare(
             "SELECT id FROM artifacts
              WHERE (?1 IS NULL OR state = ?1)
@@ -132,31 +234,43 @@ impl Registry {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         ids.into_iter()
-            .map(|id| self.get(&id).map(Option::unwrap))
+            .map(|id| load_artifact(&self.conn, &id))
             .collect()
     }
 
-    pub fn forget(&mut self, key: &str) -> Result<bool> {
-        let Some(id) = self.resolve_id(key)? else {
-            return Ok(false);
+    pub fn forget(&mut self, key: &str) -> Result<()> {
+        let Some(id) = self.resolve_id(key).map_err(Error::Database)? else {
+            return Err(Error::NotFound {
+                key: key.to_owned(),
+            });
         };
-        let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM artifact_fts WHERE artifact_id=?1", [&id])?;
-        tx.execute("DELETE FROM artifacts WHERE id=?1", [&id])?;
-        tx.commit()?;
-        Ok(true)
+        self.forget_id(&id).map_err(Error::Database)
     }
 
-    pub fn index(&mut self, key: &str, input: IndexInput) -> Result<Option<Artifact>> {
-        let Some(old) = self.get(key)? else {
-            return Ok(None);
+    fn forget_id(&mut self, id: &str) -> anyhow::Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM artifact_fts WHERE artifact_id=?1", [id])?;
+        tx.execute("DELETE FROM artifacts WHERE id=?1", [id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn index(&mut self, key: &str, input: IndexInput) -> Result<Artifact> {
+        input.validate().map_err(Error::InvalidInput)?;
+        let Some(old) = self.get_optional(key).map_err(Error::Database)? else {
+            return Err(Error::NotFound {
+                key: key.to_owned(),
+            });
         };
-        input.validate()?;
+        self.index_tx(&old, input).map_err(Error::Database)
+    }
+
+    fn index_tx(&mut self, old: &Artifact, input: IndexInput) -> anyhow::Result<Artifact> {
         let now = timestamp();
         let tx = self.conn.transaction()?;
-        apply_index(&tx, &old, input, &now)?;
+        apply_index(&tx, old, input, &now)?;
         tx.commit()?;
-        self.get(&old.id)
+        load_artifact(&self.conn, &old.id)
     }
 
     pub fn search(
@@ -167,16 +281,26 @@ impl Registry {
     ) -> Result<Vec<SearchCard>> {
         let query = query.trim();
         if query.is_empty() {
-            bail!("search query cannot be empty");
+            return Err(Error::EmptyQuery);
         }
+        self.search_inner(query, limit, filters)
+            .map_err(Error::Database)
+    }
+
+    fn search_inner(
+        &self,
+        query: &str,
+        limit: usize,
+        filters: &SearchFilters<'_>,
+    ) -> anyhow::Result<Vec<SearchCard>> {
         let mut results = Vec::new();
         let mut seen = HashSet::new();
         let mut exact_locator_match = false;
-        if let Some(artifact) = self.get(query)? {
+        if let Some(artifact) = self.get_optional(query)? {
             push_card(&mut results, &mut seen, artifact, 1.0, filters);
             exact_locator_match = is_locator_or_key(query);
         } else if let Ok(identity) = identify(query)
-            && let Some(artifact) = self.get(&identity.canonical_key)?
+            && let Some(artifact) = self.get_optional(&identity.canonical_key)?
         {
             push_card(&mut results, &mut seen, artifact, 1.0, filters);
             exact_locator_match = is_locator_or_key(query);
@@ -193,7 +317,7 @@ impl Registry {
             .query_map([query], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for id in exact_ids {
-            if let Some(artifact) = self.get(&id)? {
+            if let Some(artifact) = self.get_optional(&id)? {
                 push_card(&mut results, &mut seen, artifact, 0.95, filters);
             }
         }
@@ -220,7 +344,7 @@ impl Registry {
         filters: &SearchFilters<'_>,
         seen: &mut HashSet<String>,
         results: &mut Vec<SearchCard>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let sql = format!(
             "SELECT artifact_id, {FTS_BM25_WEIGHTS} AS rank
              FROM artifact_fts
@@ -235,7 +359,7 @@ impl Registry {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (id, bm25_raw) in rows {
-            if let Some(artifact) = self.get(&id)? {
+            if let Some(artifact) = self.get_optional(&id)? {
                 let score = bm25_to_score(bm25_raw, score_floor, score_span);
                 push_card(results, seen, artifact, score, filters);
             }
@@ -244,6 +368,10 @@ impl Registry {
     }
 
     pub fn reindex(&mut self) -> Result<usize> {
+        self.reindex_inner().map_err(Error::Database)
+    }
+
+    fn reindex_inner(&mut self) -> anyhow::Result<usize> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM artifact_fts", [])?;
         let ids = {
@@ -258,7 +386,11 @@ impl Registry {
         Ok(ids.len())
     }
 
-    pub fn doctor(&self) -> Result<Value> {
+    pub fn doctor(&self) -> Result<DoctorReport> {
+        self.doctor_inner().map_err(Error::Database)
+    }
+
+    fn doctor_inner(&self) -> anyhow::Result<DoctorReport> {
         let integrity: String = self
             .conn
             .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
@@ -292,8 +424,9 @@ impl Registry {
             |row| row.get(0),
         )?;
         let missing_search_text: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM artifacts WHERE state='indexed' AND (search_text IS NULL OR trim(search_text)='')",
-            [], |row| row.get(0),
+            "SELECT COUNT(*) FROM artifacts WHERE state=?1 AND (search_text IS NULL OR trim(search_text)='')",
+            [ArtifactState::Indexed],
+            |row| row.get(0),
         )?;
         let healthy = integrity == "ok"
             && schema_version == CURRENT_SCHEMA_VERSION
@@ -302,42 +435,46 @@ impl Registry {
             && fts_rows == artifacts
             && missing_fts == 0
             && missing_search_text == 0;
-        Ok(json!({
-            "healthy": healthy,
-            "sqlite_integrity": integrity,
-            "foreign_key_integrity": foreign_key_integrity,
-            "fts_integrity": fts_integrity,
-            "schema_version": schema_version,
-            "artifacts": artifacts,
-            "fts_rows": fts_rows,
-            "missing_fts": missing_fts,
-            "indexed_missing_search_text": missing_search_text
-        }))
+        Ok(DoctorReport {
+            healthy,
+            sqlite_integrity: integrity,
+            foreign_key_integrity,
+            fts_integrity,
+            schema_version,
+            artifacts,
+            fts_rows,
+            missing_fts,
+            indexed_missing_search_text: missing_search_text,
+        })
     }
 
-    pub fn stats(&self) -> Result<Value> {
+    pub fn stats(&self) -> Result<StatsReport> {
+        self.stats_inner().map_err(Error::Database)
+    }
+
+    fn stats_inner(&self) -> anyhow::Result<StatsReport> {
         let total: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM artifacts", [], |row| row.get(0))?;
         let mut stmt = self
             .conn
             .prepare("SELECT state, COUNT(*) FROM artifacts GROUP BY state")?;
-        let mut states = serde_json::Map::new();
+        let mut states = BTreeMap::new();
         for row in stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })? {
             let (name, count) = row?;
-            states.insert(name, json!(count));
+            states.insert(name, count);
         }
         let mut stmt = self.conn.prepare(
             "SELECT COALESCE(provider,'unknown'), COUNT(*) FROM artifacts GROUP BY provider",
         )?;
-        let mut providers = serde_json::Map::new();
+        let mut providers = BTreeMap::new();
         for row in stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })? {
             let (name, count) = row?;
-            providers.insert(name, json!(count));
+            providers.insert(name, count);
         }
         let total_accesses: i64 = self.conn.query_row(
             "SELECT COALESCE(SUM(access_count), 0) FROM artifacts",
@@ -356,30 +493,30 @@ impl Registry {
              ORDER BY access_count DESC, last_accessed_at DESC, id ASC
              LIMIT 5",
         )?;
-        let top_accessed: Vec<Value> = top_stmt
+        let top_accessed = top_stmt
             .query_map([], |row| {
-                Ok(json!({
-                    "id": row.get::<_, String>(0)?,
-                    "title": row.get::<_, Option<String>>(1)?,
-                    "canonical_key": row.get::<_, String>(2)?,
-                    "provider": row.get::<_, Option<String>>(3)?,
-                    "access_count": row.get::<_, i64>(4)?,
-                    "last_accessed_at": row.get::<_, Option<String>>(5)?,
-                }))
+                Ok(TopAccessedArtifact {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    canonical_key: row.get(2)?,
+                    provider: row.get(3)?,
+                    access_count: row.get(4)?,
+                    last_accessed_at: row.get(5)?,
+                })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(json!({
-            "artifacts": total,
-            "states": states,
-            "providers": providers,
-            "total_accesses": total_accesses,
-            "accessed_artifacts": accessed_artifacts,
-            "top_accessed": top_accessed,
-            "semantic_search": false
-        }))
+        Ok(StatsReport {
+            artifacts: total,
+            states,
+            providers,
+            total_accesses,
+            accessed_artifacts,
+            top_accessed,
+            semantic_search: false,
+        })
     }
 
-    fn resolve_id(&self, key: &str) -> Result<Option<String>> {
+    fn resolve_id(&self, key: &str) -> anyhow::Result<Option<String>> {
         let direct = self
             .conn
             .query_row(
@@ -420,7 +557,7 @@ fn timestamp() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn json_string(value: &Option<Value>) -> Result<Option<String>> {
+fn json_string(value: &Option<Value>) -> anyhow::Result<Option<String>> {
     value
         .as_ref()
         .map(serde_json::to_string)
@@ -464,7 +601,7 @@ fn artifact_row(row: &Row<'_>) -> rusqlite::Result<Artifact> {
     })
 }
 
-fn load_artifact(conn: &Connection, id: &str) -> Result<Artifact> {
+fn load_artifact(conn: &Connection, id: &str) -> anyhow::Result<Artifact> {
     let mut artifact: Artifact = conn.query_row(
         "SELECT id, canonical_key, kind, provider, state, primary_uri, title, summary,
                 search_text, source_external_id, source_revision, source_updated_at,
@@ -505,7 +642,7 @@ fn upsert_artifact(
     title: Option<&str>,
     explicitly_saved: bool,
     now: &str,
-) -> Result<String> {
+) -> anyhow::Result<String> {
     let existing: Option<String> = tx
         .query_row(
             "SELECT id FROM artifacts WHERE canonical_key=?1",
@@ -555,12 +692,13 @@ fn upsert_artifact(
             "INSERT INTO artifacts
              (id, canonical_key, kind, provider, state, primary_uri, title,
               source_external_id, is_explicitly_saved, created_at, updated_at, last_seen_at)
-             VALUES (?1, ?2, ?3, ?4, 'registered', ?5, ?6, ?7, ?8, ?9, ?9, ?9)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?10)",
             params![
                 id,
                 identity.canonical_key,
                 identity.kind,
                 identity.provider,
+                ArtifactState::Registered,
                 identity.uri,
                 title,
                 identity.external_id,
@@ -574,7 +712,12 @@ fn upsert_artifact(
     Ok(id)
 }
 
-fn apply_index(tx: &Transaction<'_>, old: &Artifact, input: IndexInput, now: &str) -> Result<()> {
+fn apply_index(
+    tx: &Transaction<'_>,
+    old: &Artifact,
+    input: IndexInput,
+    now: &str,
+) -> anyhow::Result<()> {
     let source = input.source_metadata.or(old.source_metadata.clone());
     let title = source
         .as_ref()
@@ -601,12 +744,13 @@ fn apply_index(tx: &Transaction<'_>, old: &Artifact, input: IndexInput, now: &st
         .or(old.provenance.clone());
     let catalog_json = serde_json::to_string(&input.catalog)?;
     tx.execute(
-        "UPDATE artifacts SET state='indexed', title=?2, summary=?3, search_text=?4,
-         source_revision=?5, source_updated_at=?6, retrieval_json=?7,
-         source_metadata_json=?8, catalog_metadata_json=?9, provenance_json=?10,
-         updated_at=?11, last_indexed_at=?11 WHERE id=?1",
+        "UPDATE artifacts SET state=?2, title=?3, summary=?4, search_text=?5,
+         source_revision=?6, source_updated_at=?7, retrieval_json=?8,
+         source_metadata_json=?9, catalog_metadata_json=?10, provenance_json=?11,
+         updated_at=?12, last_indexed_at=?12 WHERE id=?1",
         params![
             old.id,
+            ArtifactState::Indexed,
             title,
             input.catalog.summary,
             input.catalog.search_text,
@@ -626,14 +770,14 @@ fn apply_index(tx: &Transaction<'_>, old: &Artifact, input: IndexInput, now: &st
     Ok(())
 }
 
-fn strings(conn: &Connection, sql: &str, id: &str) -> Result<Vec<String>> {
+fn strings(conn: &Connection, sql: &str, id: &str) -> anyhow::Result<Vec<String>> {
     let mut stmt = conn.prepare(sql)?;
     Ok(stmt
         .query_map([id], |row| row.get(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-fn add_alias(tx: &Transaction<'_>, uri: &str, id: &str, now: &str) -> Result<()> {
+fn add_alias(tx: &Transaction<'_>, uri: &str, id: &str, now: &str) -> anyhow::Result<()> {
     let owner: Option<String> = tx
         .query_row(
             "SELECT artifact_id FROM aliases WHERE uri=?1",
@@ -659,7 +803,7 @@ fn replace_strings(
     column: &str,
     id: &str,
     values: &[String],
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let delete = format!("DELETE FROM {table} WHERE artifact_id=?1");
     let insert = format!("INSERT OR IGNORE INTO {table}(artifact_id, {column}) VALUES(?1, ?2)");
     tx.execute(&delete, [id])?;
@@ -669,7 +813,7 @@ fn replace_strings(
     Ok(())
 }
 
-fn update_fts(tx: &Transaction<'_>, id: &str) -> Result<()> {
+fn update_fts(tx: &Transaction<'_>, id: &str) -> anyhow::Result<()> {
     tx.execute("DELETE FROM artifact_fts WHERE artifact_id=?1", [id])?;
     let (title, summary, search_text): (Option<String>, Option<String>, Option<String>) = tx
         .query_row(
@@ -832,7 +976,12 @@ mod tests {
         for populated in [false, true] {
             if populated {
                 let item = db
-                    .add("https://docs.google.com/document/d/ABC/view", None, false)
+                    .add(
+                        "https://docs.google.com/document/d/ABC/view",
+                        None,
+                        false,
+                        None,
+                    )
                     .unwrap();
                 db.index(
                     &item.id,
@@ -846,7 +995,9 @@ mod tests {
             let before = snapshot(&db);
             let changes = db.conn.total_changes();
             for uri in &rejected {
-                let error = db.add(uri, Some("Must not be stored"), true).unwrap_err();
+                let error = db
+                    .add(uri, Some("Must not be stored"), true, None)
+                    .unwrap_err();
                 assert!(!error.to_string().contains("TEST_SECRET"));
                 assert_eq!(db.conn.total_changes(), changes, "{uri}");
                 assert_eq!(snapshot(&db), before, "{uri}");
@@ -864,13 +1015,14 @@ mod tests {
         let path = test_path();
         let mut db = Registry::open(&path).unwrap();
         for uri in crate::credential_cases::accepted() {
-            db.add(&uri, None, false).expect(&uri);
+            db.add(&uri, None, false, None).expect(&uri);
         }
         let first = db
             .add(
                 "https://example.com/products?code=ABC&state=CA",
                 None,
                 false,
+                None,
             )
             .unwrap();
         let duplicate = db
@@ -878,6 +1030,7 @@ mod tests {
                 "https://EXAMPLE.com/products?code=ABC&state=CA#details",
                 None,
                 false,
+                None,
             )
             .unwrap();
         let other = db
@@ -885,17 +1038,17 @@ mod tests {
                 "https://example.com/products?code=XYZ&state=CA",
                 None,
                 false,
+                None,
             )
             .unwrap();
         assert_eq!(first.id, duplicate.id);
         assert_ne!(first.id, other.id);
         let before = snapshot(&db);
         drop(db);
-        let db = Registry::open(&path).unwrap();
+        let mut db = Registry::open(&path).unwrap();
         assert_eq!(snapshot(&db), before);
         assert_eq!(
-            db.get("https://example.com/products?code=ABC&state=CA")
-                .unwrap()
+            db.get("https://example.com/products?code=ABC&state=CA", false)
                 .unwrap()
                 .id,
             first.id
@@ -930,26 +1083,30 @@ mod tests {
         let edit = "https://docs.google.com/document/d/ABC/edit";
         let view = "https://docs.google.com/document/d/ABC/view";
         let mut db = Registry::open(&path).unwrap();
-        let first = db.add(edit, None, false).unwrap();
-        let second = db.add(view, Some("Authentication"), true).unwrap();
+        let first = db.add(edit, None, false, None).unwrap();
+        let second = db.add(view, Some("Authentication"), true, None).unwrap();
         assert_eq!(first.id, second.id);
         assert_eq!(second.aliases.len(), 2);
         assert!(second.is_explicitly_saved);
         drop(db);
-        let db = Registry::open(&path).unwrap();
-        assert_eq!(db.get(edit).unwrap().unwrap().id, first.id);
-        assert_eq!(db.get(view).unwrap().unwrap().id, first.id);
-        assert_eq!(db.stats().unwrap()["artifacts"], 1);
+        let mut db = Registry::open(&path).unwrap();
+        assert_eq!(db.get(edit, false).unwrap().id, first.id);
+        assert_eq!(db.get(view, false).unwrap().id, first.id);
+        assert_eq!(db.stats().unwrap().artifacts, 1);
         drop(db);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn fts_updates_rebuilds_and_forgets() {
-        let path = test_path();
-        let mut db = Registry::open(&path).unwrap();
+        let mut db = Registry::open_in_memory().unwrap();
         let item = db
-            .add("https://docs.google.com/document/d/ABC/edit", None, true)
+            .add(
+                "https://docs.google.com/document/d/ABC/edit",
+                None,
+                true,
+                None,
+            )
             .unwrap();
         let filters = SearchFilters::default();
         db.index(
@@ -959,7 +1116,6 @@ mod tests {
                 "SAML migration with Okta and SCIM provisioning",
             ),
         )
-        .unwrap()
         .unwrap();
         assert_eq!(db.search("SCIM", 10, &filters).unwrap()[0].id, item.id);
         assert_eq!(
@@ -999,23 +1155,19 @@ mod tests {
                 "OAuth migration and token exchange",
             ),
         )
-        .unwrap()
         .unwrap();
         assert!(db.search("SCIM", 10, &filters).unwrap().is_empty());
         assert_eq!(db.reindex().unwrap(), 1);
         assert_eq!(db.search("OAuth", 10, &filters).unwrap().len(), 1);
-        assert_eq!(db.doctor().unwrap()["healthy"], true);
-        assert!(db.forget(&item.id).unwrap());
+        assert!(db.doctor().unwrap().healthy);
+        db.forget(&item.id).unwrap();
         assert!(db.search("OAuth", 10, &filters).unwrap().is_empty());
-        assert_eq!(db.doctor().unwrap()["healthy"], true);
-        drop(db);
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert!(db.doctor().unwrap().healthy);
     }
 
     #[test]
     fn add_and_index_is_atomic_deduplicates_and_filters_recent() {
-        let path = test_path();
-        let mut db = Registry::open(&path).unwrap();
+        let mut db = Registry::open_in_memory().unwrap();
 
         let empty_before = snapshot(&db);
         let invalid_card: IndexInput = serde_json::from_value(json!({
@@ -1023,26 +1175,26 @@ mod tests {
             "catalog": {"summary": "Bad", "search_text": "Bad"}
         }))
         .unwrap();
-        assert!(
-            db.add_and_index(
+        assert!(matches!(
+            db.add(
                 "https://docs.google.com/document/d/ATOM/edit",
                 None,
                 true,
-                invalid_card,
-            )
-            .is_err()
-        );
+                Some(invalid_card),
+            ),
+            Err(Error::InvalidInput(_))
+        ));
         assert_eq!(snapshot(&db), empty_before);
 
         let first = db
-            .add_and_index(
+            .add(
                 "https://docs.google.com/document/d/ATOM/edit",
                 Some("Fallback Title"),
                 true,
-                catalog("Atomic Doc", "SCIM provisioning architecture"),
+                Some(catalog("Atomic Doc", "SCIM provisioning architecture")),
             )
             .unwrap();
-        assert_eq!(first.state, "indexed");
+        assert_eq!(first.state, ArtifactState::Indexed);
         assert!(first.is_explicitly_saved);
         assert_eq!(first.title.as_deref(), Some("Atomic Doc"));
         assert_eq!(
@@ -1059,11 +1211,11 @@ mod tests {
         }))
         .unwrap();
         let second = db
-            .add_and_index(
+            .add(
                 "https://docs.google.com/document/d/ATOM/view",
                 None,
                 false,
-                minimal_card,
+                Some(minimal_card),
             )
             .unwrap();
         assert_eq!(second.id, first.id);
@@ -1083,24 +1235,24 @@ mod tests {
             "catalog": {"summary": "   ", "search_text": "nonempty"}
         }))
         .unwrap();
-        assert!(
-            db.add_and_index(
+        assert!(matches!(
+            db.add(
                 "https://docs.google.com/document/d/ATOM/preview",
                 None,
                 true,
-                empty_summary,
-            )
-            .is_err()
-        );
-        assert!(
-            db.add_and_index(
+                Some(empty_summary),
+            ),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            db.add(
                 "https://docs.google.com/document/d/ATOM/preview?token=TEST_SECRET",
                 None,
                 true,
-                catalog("Should Fail", "Should Fail"),
-            )
-            .is_err()
-        );
+                Some(catalog("Should Fail", "Should Fail")),
+            ),
+            Err(Error::InvalidInput(_))
+        ));
         assert_eq!(db.conn.total_changes(), changes);
         assert_eq!(snapshot(&db), before_bad_update);
 
@@ -1109,26 +1261,27 @@ mod tests {
                 "https://github.com/org/repo/issues/99",
                 Some("Bug 99"),
                 true,
+                None,
             )
             .unwrap();
-        assert_eq!(unindexed.state, "registered");
-        let registered = db.recent(10, Some("registered"), None).unwrap();
+        assert_eq!(unindexed.state, ArtifactState::Registered);
+        let registered = db
+            .recent(10, Some(ArtifactState::Registered), None)
+            .unwrap();
         assert_eq!(registered.len(), 1);
         assert_eq!(registered[0].id, unindexed.id);
-        let indexed = db.recent(10, Some("indexed"), None).unwrap();
+        let indexed = db.recent(10, Some(ArtifactState::Indexed), None).unwrap();
         assert_eq!(indexed.len(), 1);
         assert_eq!(indexed[0].id, first.id);
         let gdrive = db.recent(10, None, Some("google_drive")).unwrap();
         assert_eq!(gdrive.len(), 1);
         assert_eq!(gdrive[0].id, first.id);
         assert!(
-            db.recent(10, Some("indexed"), Some("github"))
+            db.recent(10, Some(ArtifactState::Indexed), Some("github"))
                 .unwrap()
                 .is_empty()
         );
-        assert_eq!(db.doctor().unwrap()["healthy"], true);
-        drop(db);
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert!(db.doctor().unwrap().healthy);
     }
 
     #[test]
@@ -1138,41 +1291,40 @@ mod tests {
 
     #[test]
     fn fts_supports_porter_stemming_stopwords_and_first_bm25_and_operator_words() {
-        let path = test_path();
-        let mut db = Registry::open(&path).unwrap();
+        let mut db = Registry::open_in_memory().unwrap();
         let filters = SearchFilters::default();
 
         let webhook_rfc = db
-            .add_and_index(
+            .add(
                 "https://docs.google.com/document/d/WH_RFC/edit",
                 None,
                 true,
-                catalog(
+                Some(catalog(
                     "Webhook Retries RFC",
                     "Design for outbound webhook retries exponential backoff jitter and dead letter queues",
-                ),
+                )),
             )
             .unwrap();
         let webhook_note = db
-            .add_and_index(
+            .add(
                 "https://docs.google.com/document/d/WH_NOTE/edit",
                 None,
                 true,
-                catalog(
+                Some(catalog(
                     "Partner Integration Notes",
                     "Mentions webhooks once without delivery details",
-                ),
+                )),
             )
             .unwrap();
         let cert_doc = db
-            .add_and_index(
+            .add(
                 "https://docs.google.com/document/d/CERT_DOC/edit",
                 None,
                 true,
-                catalog(
+                Some(catalog(
                     "TLS Certificate Rotation Postmortem",
                     "Root cause for certificate rotation outage near midnight",
-                ),
+                )),
             )
             .unwrap();
 
@@ -1204,31 +1356,27 @@ mod tests {
         // Stopword-only query falls back to raw terms instead of silently producing an empty match expression.
         let stopword_only = db.search("for and", 10, &filters).unwrap();
         assert!(!stopword_only.is_empty());
-
-        drop(db);
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn lookup_tracking_counts_explicit_gets_only_and_surfaces_in_stats() {
-        let path = test_path();
-        let mut db = Registry::open(&path).unwrap();
+        let mut db = Registry::open_in_memory().unwrap();
         let filters = SearchFilters::default();
 
         let first = db
-            .add_and_index(
+            .add(
                 "https://docs.google.com/document/d/TRACK1/edit",
                 None,
                 true,
-                catalog("First Anchor Doc", "webhook retries architecture"),
+                Some(catalog("First Anchor Doc", "webhook retries architecture")),
             )
             .unwrap();
         let second = db
-            .add_and_index(
+            .add(
                 "https://docs.google.com/document/d/TRACK2/edit",
                 None,
                 true,
-                catalog("Second Anchor Doc", "saml federation architecture"),
+                Some(catalog("Second Anchor Doc", "saml federation architecture")),
             )
             .unwrap();
         let third = db
@@ -1236,6 +1384,7 @@ mod tests {
                 "https://github.com/org/repo/issues/7",
                 Some("Issue 7"),
                 true,
+                None,
             )
             .unwrap();
 
@@ -1245,20 +1394,20 @@ mod tests {
         assert!(!db.search("architecture", 10, &filters).unwrap().is_empty());
         assert_eq!(db.recent(10, None, None).unwrap().len(), 3);
         assert_eq!(db.reindex().unwrap(), 3);
-        assert_eq!(db.doctor().unwrap()["healthy"], true);
-        let no_track = db.get_tracked(&first.id, false).unwrap().unwrap();
+        assert!(db.doctor().unwrap().healthy);
+        let no_track = db.get(&first.id, false).unwrap();
         assert_eq!(no_track.access_count, 0);
         assert_eq!(no_track.last_accessed_at, None);
 
         let initial_stats = db.stats().unwrap();
-        assert_eq!(initial_stats["total_accesses"], 0);
-        assert_eq!(initial_stats["accessed_artifacts"], 0);
-        assert_eq!(initial_stats["top_accessed"].as_array().unwrap().len(), 0);
+        assert_eq!(initial_stats.total_accesses, 0);
+        assert_eq!(initial_stats.accessed_artifacts, 0);
+        assert!(initial_stats.top_accessed.is_empty());
 
         // Explicit tracked gets increment access_count and set last_accessed_at without mutating updated_at/last_seen_at.
         let updated_before = first.updated_at.clone();
         let seen_before = first.last_seen_at.clone();
-        let g1 = db.get_tracked(&first.id, true).unwrap().unwrap();
+        let g1 = db.get(&first.id, true).unwrap();
         assert_eq!(g1.access_count, 1);
         assert!(g1.last_accessed_at.is_some());
         assert_eq!(g1.updated_at, updated_before);
@@ -1266,65 +1415,59 @@ mod tests {
 
         // Lookup by canonical key or alias URL also increments the same artifact.
         let g2 = db
-            .get_tracked("https://docs.google.com/document/d/TRACK1/view", true)
-            .unwrap()
+            .get("https://docs.google.com/document/d/TRACK1/view", true)
             .unwrap();
         assert_eq!(g2.id, first.id);
         assert_eq!(g2.access_count, 2);
 
-        let s1 = db.get_tracked(&second.id, true).unwrap().unwrap();
+        let s1 = db.get(&second.id, true).unwrap();
         assert_eq!(s1.access_count, 1);
 
         // Untouched artifact remains at 0 and is omitted from top_accessed.
-        assert_eq!(db.get(&third.id).unwrap().unwrap().access_count, 0);
+        assert_eq!(db.get(&third.id, false).unwrap().access_count, 0);
 
         let stats = db.stats().unwrap();
-        assert_eq!(stats["total_accesses"], 3);
-        assert_eq!(stats["accessed_artifacts"], 2);
-        let top = stats["top_accessed"].as_array().unwrap();
-        assert_eq!(top.len(), 2);
-        assert_eq!(top[0]["id"], first.id);
-        assert_eq!(top[0]["access_count"], 2);
-        assert_eq!(top[1]["id"], second.id);
-        assert_eq!(top[1]["access_count"], 1);
+        assert_eq!(stats.total_accesses, 3);
+        assert_eq!(stats.accessed_artifacts, 2);
+        assert_eq!(stats.top_accessed.len(), 2);
+        assert_eq!(stats.top_accessed[0].id, first.id);
+        assert_eq!(stats.top_accessed[0].access_count, 2);
+        assert_eq!(stats.top_accessed[1].id, second.id);
+        assert_eq!(stats.top_accessed[1].access_count, 1);
 
         // Forgetting removes the artifact from usage stats cleanly.
-        assert!(db.forget(&first.id).unwrap());
+        db.forget(&first.id).unwrap();
         let after_forget = db.stats().unwrap();
-        assert_eq!(after_forget["total_accesses"], 1);
-        assert_eq!(after_forget["accessed_artifacts"], 1);
-        assert_eq!(after_forget["top_accessed"][0]["id"], second.id);
-
-        drop(db);
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert_eq!(after_forget.total_accesses, 1);
+        assert_eq!(after_forget.accessed_artifacts, 1);
+        assert_eq!(after_forget.top_accessed[0].id, second.id);
     }
 
     #[test]
     fn local_filesystem_path_search_short_circuits_without_unrelated_fts_hits() {
-        let path = test_path();
-        let mut db = Registry::open(&path).unwrap();
+        let mut db = Registry::open_in_memory().unwrap();
         let filters = SearchFilters::default();
 
         let local = db
-            .add_and_index(
+            .add(
                 "/workspace/ops/canary-deployment-runbook.md",
                 None,
                 true,
-                catalog(
+                Some(catalog(
                     "Canary Deployment Runbook",
                     "Local markdown runbook for progressive canary deployments",
-                ),
+                )),
             )
             .unwrap();
         let _unrelated = db
-            .add_and_index(
+            .add(
                 "https://www.notion.so/Backup-Runbook-0123456789abcdef0123456789abcdef",
                 None,
                 true,
-                catalog(
+                Some(catalog(
                     "Postgres Backup Runbook",
                     "Operational runbook for point-in-time recovery and light/dark dashboard theme",
-                ),
+                )),
             )
             .unwrap();
 
@@ -1348,8 +1491,5 @@ mod tests {
         assert!(is_filesystem_path_locator(r"\\server\share\notes.md"));
         assert!(!is_filesystem_path_locator("roadmap"));
         assert!(!is_filesystem_path_locator("light/dark theme"));
-
-        drop(db);
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }
