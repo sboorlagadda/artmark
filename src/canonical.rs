@@ -17,7 +17,7 @@ pub fn identify(input: &str) -> Result<Identity> {
     if input.is_empty() {
         bail!("artifact URI cannot be empty");
     }
-    if input.starts_with("//") {
+    if input.starts_with("//") || is_windows_path(input) {
         return local_path(Path::new(input), input);
     }
     let mut url = match Url::parse(input) {
@@ -502,6 +502,32 @@ fn known_identity(key: String, kind: &str, provider: &str, id: &str, uri: &str) 
     }
 }
 
+fn is_windows_path(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    let is_drive_path = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    is_drive_path || input.starts_with('\\')
+}
+
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(raw) = path.to_str()
+        && let Some(stripped) = raw.strip_prefix(r"\\?\")
+    {
+        let bytes = stripped.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'\\'
+        {
+            return PathBuf::from(stripped);
+        }
+    }
+    path
+}
+
 fn local_path(path: &Path, original: &str) -> Result<Identity> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -518,6 +544,10 @@ fn local_path(path: &Path, original: &str) -> Result<Identity> {
             _ => clean.push(part.as_os_str()),
         }
     }
+    let clean = match std::fs::canonicalize(&clean) {
+        Ok(resolved) => strip_windows_verbatim_prefix(resolved),
+        Err(_) => clean,
+    };
     let path = clean.to_string_lossy().into_owned();
     Ok(Identity {
         canonical_key: format!("file:{path}"),
@@ -696,5 +726,18 @@ mod tests {
             conf_page.canonical_key,
             "confluence:page:acme.atlassian.net:123456789"
         );
+    }
+
+    #[test]
+    fn windows_drive_paths_are_treated_as_filesystem_not_url_schemes() {
+        for path in [
+            r"C:\Users\dev\notes.md",
+            "C:/Users/dev/notes.md",
+            r"\\server\share\notes.md",
+        ] {
+            let identity = identify(path).unwrap();
+            assert_eq!(identity.provider.as_deref(), Some("filesystem"), "{path}");
+            assert_eq!(identity.kind, "local_file", "{path}");
+        }
     }
 }
