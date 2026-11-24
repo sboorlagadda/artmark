@@ -1,6 +1,79 @@
 use anyhow::{Result, bail};
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt;
+use std::str::FromStr;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactState {
+    Registered,
+    Indexed,
+    Unreachable,
+}
+
+impl ArtifactState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Registered => "registered",
+            Self::Indexed => "indexed",
+            Self::Unreachable => "unreachable",
+        }
+    }
+}
+
+impl fmt::Display for ArtifactState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseArtifactStateError {
+    value: String,
+}
+
+impl fmt::Display for ParseArtifactStateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid artifact state '{}'; expected registered, indexed, or unreachable",
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for ParseArtifactStateError {}
+
+impl FromStr for ArtifactState {
+    type Err = ParseArtifactStateError;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "registered" => Ok(Self::Registered),
+            "indexed" => Ok(Self::Indexed),
+            "unreachable" => Ok(Self::Unreachable),
+            _ => Err(ParseArtifactStateError {
+                value: value.to_owned(),
+            }),
+        }
+    }
+}
+
+impl FromSql for ArtifactState {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        raw.parse::<Self>()
+            .map_err(|err| FromSqlError::Other(Box::new(err)))
+    }
+}
+
+impl ToSql for ArtifactState {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Artifact {
@@ -8,7 +81,7 @@ pub struct Artifact {
     pub canonical_key: String,
     pub kind: String,
     pub provider: Option<String>,
-    pub state: String,
+    pub state: ArtifactState,
     pub primary_uri: Option<String>,
     pub title: Option<String>,
     pub summary: Option<String>,
@@ -128,7 +201,7 @@ pub struct SearchCard {
     pub title: Option<String>,
     pub kind: String,
     pub provider: Option<String>,
-    pub state: String,
+    pub state: ArtifactState,
     pub summary: Option<String>,
     pub primary_uri: Option<String>,
     pub topics: Vec<String>,
@@ -145,7 +218,7 @@ impl SearchCard {
             title: artifact.title.clone(),
             kind: artifact.kind.clone(),
             provider: artifact.provider.clone(),
-            state: artifact.state.clone(),
+            state: artifact.state,
             summary: artifact.summary.clone(),
             primary_uri: artifact.primary_uri.clone(),
             topics: artifact.topics.clone(),
@@ -162,7 +235,7 @@ pub struct SearchFilters<'a> {
     pub kind: Option<&'a str>,
     pub topic: Option<&'a str>,
     pub tag: Option<&'a str>,
-    pub state: Option<&'a str>,
+    pub state: Option<ArtifactState>,
     pub created_after: Option<&'a str>,
     pub seen_after: Option<&'a str>,
     pub indexed_after: Option<&'a str>,

@@ -1,4 +1,5 @@
 use crate::canonical::{Identity, identify};
+use crate::model::ArtifactState;
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -345,7 +346,7 @@ struct LegacyArtifactRow {
     canonical_key: String,
     kind: String,
     provider: Option<String>,
-    state: String,
+    state: ArtifactState,
     primary_uri: Option<String>,
     title: Option<String>,
     summary: Option<String>,
@@ -456,14 +457,14 @@ fn migrate_to_v3(tx: &Transaction<'_>) -> Result<()> {
         // Choose a deterministic winner that preserves indexed/explicit catalog work.
         members.sort_by(|a, b| {
             (
-                a.state != "indexed",
+                a.state != ArtifactState::Indexed,
                 !a.is_explicitly_saved,
                 a.canonical_key != target_key,
                 a.created_at.as_str(),
                 a.id.as_str(),
             )
                 .cmp(&(
-                    b.state != "indexed",
+                    b.state != ArtifactState::Indexed,
                     !b.is_explicitly_saved,
                     b.canonical_key != target_key,
                     b.created_at.as_str(),
@@ -473,7 +474,7 @@ fn migrate_to_v3(tx: &Transaction<'_>) -> Result<()> {
 
         let mut winner = members.remove(0);
         for loser in members {
-            if winner.state != "indexed" && loser.state == "indexed" {
+            if winner.state != ArtifactState::Indexed && loser.state == ArtifactState::Indexed {
                 winner.state = loser.state;
             }
             if winner.title.is_none() {

@@ -1,19 +1,11 @@
-mod canonical;
-#[cfg(test)]
-mod credential_cases;
-mod credentials;
-mod db;
-mod migrations;
-mod model;
-
 use anyhow::{Context, Result, anyhow};
+use artmark::{ArtifactState, DoctorReport, Error, IndexInput, Registry, SearchFilters};
 use clap::{Parser, Subcommand};
-use db::Registry;
-use model::{IndexInput, SearchFilters};
 use serde::Serialize;
 use serde_json::json;
 use std::io::Read;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 #[derive(Parser)]
 #[command(
@@ -156,7 +148,7 @@ fn run() -> Outcome<()> {
         Some(path) => path,
         None => default_database().map_err(input_error)?,
     };
-    let mut db = Registry::open(&path).map_err(database_error)?;
+    let mut db = Registry::open(&path).map_err(registry_error)?;
     match cli.command {
         Command::Add {
             uri,
@@ -164,41 +156,34 @@ fn run() -> Outcome<()> {
             explicit,
             input,
         } => {
-            canonical::identify(&uri).map_err(input_error)?;
-            let artifact = if let Some(input) = input {
-                let content = read_input(&input).map_err(input_error)?;
-                let entry: IndexInput = serde_json::from_str(&content).map_err(input_error)?;
-                entry.validate().map_err(input_error)?;
-                let artifact = db
-                    .add_and_index(&uri, title.as_deref(), explicit, entry)
-                    .map_err(database_error)?;
-                if cli.json {
-                    emit(&artifact);
-                    return Ok(());
+            let entry = match input {
+                Some(path) => {
+                    let content = read_input(&path).map_err(input_error)?;
+                    Some(serde_json::from_str::<IndexInput>(&content).map_err(input_error)?)
                 }
-                artifact
-            } else {
-                let artifact = db
-                    .add(&uri, title.as_deref(), explicit)
-                    .map_err(database_error)?;
-                if cli.json {
+                None => None,
+            };
+            let has_index = entry.is_some();
+            let artifact = db
+                .add(&uri, title.as_deref(), explicit, entry)
+                .map_err(registry_error)?;
+            if cli.json {
+                if has_index {
+                    emit(&artifact);
+                } else {
                     emit(
                         &json!({"id": artifact.id, "canonical_key": artifact.canonical_key, "state": artifact.state}),
                     );
-                    return Ok(());
                 }
-                artifact
-            };
+                return Ok(());
+            }
             println!(
                 "{}\n{}\n{}",
                 artifact.id, artifact.canonical_key, artifact.state
             );
         }
         Command::Get { artifact, no_track } => {
-            let artifact = db
-                .get_tracked(&artifact, !no_track)
-                .map_err(database_error)?
-                .ok_or_else(|| (3, anyhow!("artifact not found")))?;
+            let artifact = db.get(&artifact, !no_track).map_err(registry_error)?;
             if cli.json {
                 emit(&artifact);
             } else {
@@ -214,11 +199,7 @@ fn run() -> Outcome<()> {
         Command::Index { artifact, input } => {
             let content = read_input(&input).map_err(input_error)?;
             let entry: IndexInput = serde_json::from_str(&content).map_err(input_error)?;
-            entry.validate().map_err(input_error)?;
-            let artifact = db
-                .index(&artifact, entry)
-                .map_err(database_error)?
-                .ok_or_else(|| (3, anyhow!("artifact not found")))?;
+            let artifact = db.index(&artifact, entry).map_err(registry_error)?;
             if cli.json {
                 emit(&artifact);
             } else {
@@ -237,34 +218,34 @@ fn run() -> Outcome<()> {
             seen_after,
             indexed_after,
         } => {
-            if query.trim().is_empty() {
-                return Err((2, anyhow!("search query cannot be empty")));
-            }
+            let state = state
+                .as_deref()
+                .map(ArtifactState::from_str)
+                .transpose()
+                .map_err(input_error)?;
             let filters = SearchFilters {
                 provider: provider.as_deref(),
                 kind: kind.as_deref(),
                 topic: topic.as_deref(),
                 tag: tag.as_deref(),
-                state: state.as_deref(),
+                state,
                 created_after: created_after.as_deref(),
                 seen_after: seen_after.as_deref(),
                 indexed_after: indexed_after.as_deref(),
             };
-            let results = db.search(&query, limit, &filters).map_err(database_error)?;
+            let results = db.search(&query, limit, &filters).map_err(registry_error)?;
             if cli.json {
                 emit(&json!({"results": results}));
+            } else if results.is_empty() {
+                println!("No results found.");
             } else {
-                if results.is_empty() {
-                    println!("No results found.");
-                } else {
-                    for item in results {
-                        println!(
-                            "{}\t{}\t{}",
-                            item.id,
-                            item.title.as_deref().unwrap_or("(untitled)"),
-                            item.primary_uri.as_deref().unwrap_or("")
-                        );
-                    }
+                for item in results {
+                    println!(
+                        "{}\t{}\t{}",
+                        item.id,
+                        item.title.as_deref().unwrap_or("(untitled)"),
+                        item.primary_uri.as_deref().unwrap_or("")
+                    );
                 }
             }
         }
@@ -273,9 +254,14 @@ fn run() -> Outcome<()> {
             state,
             provider,
         } => {
+            let state = state
+                .as_deref()
+                .map(ArtifactState::from_str)
+                .transpose()
+                .map_err(input_error)?;
             let results = db
-                .recent(limit, state.as_deref(), provider.as_deref())
-                .map_err(database_error)?;
+                .recent(limit, state, provider.as_deref())
+                .map_err(registry_error)?;
             if cli.json {
                 emit(&json!({"results": results}));
             } else if results.is_empty() {
@@ -292,9 +278,7 @@ fn run() -> Outcome<()> {
             }
         }
         Command::Forget { artifact } => {
-            if !db.forget(&artifact).map_err(database_error)? {
-                return Err((3, anyhow!("artifact not found")));
-            }
+            db.forget(&artifact).map_err(registry_error)?;
             if cli.json {
                 emit(&json!({"forgotten": true}));
             } else {
@@ -302,7 +286,7 @@ fn run() -> Outcome<()> {
             }
         }
         Command::Reindex => {
-            let count = db.reindex().map_err(database_error)?;
+            let count = db.reindex().map_err(registry_error)?;
             if cli.json {
                 emit(&json!({"reindexed": count}));
             } else {
@@ -310,19 +294,23 @@ fn run() -> Outcome<()> {
             }
         }
         Command::Doctor => {
-            let mut report = db.doctor().map_err(database_error)?;
-            report["agent_setup"] = agent_setup_report();
+            let database = db.doctor().map_err(registry_error)?;
+            let healthy = database.healthy;
+            let report = CliDoctorReport {
+                database,
+                agent_setup: agent_setup_report(),
+            };
             if cli.json {
                 emit(&report);
             } else {
                 println!("{}", serde_json::to_string_pretty(&report).unwrap());
             }
-            if report.get("healthy").and_then(|v| v.as_bool()) != Some(true) {
+            if !healthy {
                 return Err((4, anyhow!("database health check failed")));
             }
         }
         Command::Stats => {
-            let stats = db.stats().map_err(database_error)?;
+            let stats = db.stats().map_err(registry_error)?;
             if cli.json {
                 emit(&stats);
             } else {
@@ -334,6 +322,13 @@ fn run() -> Outcome<()> {
         }
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+struct CliDoctorReport {
+    #[serde(flatten)]
+    database: DoctorReport,
+    agent_setup: serde_json::Value,
 }
 
 fn init_context() -> Result<serde_json::Value> {
@@ -492,6 +487,13 @@ fn emit<T: Serialize>(value: &T) {
 fn input_error(error: impl Into<anyhow::Error>) -> (i32, anyhow::Error) {
     (6, error.into())
 }
-fn database_error(error: impl Into<anyhow::Error>) -> (i32, anyhow::Error) {
-    (4, error.into())
+
+fn registry_error(error: Error) -> (i32, anyhow::Error) {
+    let code = match &error {
+        Error::EmptyQuery => 2,
+        Error::NotFound { .. } => 3,
+        Error::Database(_) => 4,
+        Error::InvalidInput(_) => 6,
+    };
+    (code, anyhow::Error::new(error))
 }
