@@ -1,0 +1,603 @@
+{
+  "description": "Anonymized realistic evaluation corpus for artmark offline FTS5 search (Issue #10).",
+  "artifacts": [
+    {
+      "label": "saml_arch",
+      "uri": "https://docs.google.com/document/d/SAML_ARCH_01/edit",
+      "aliases": ["https://docs.google.com/document/d/SAML_ARCH_01/view"],
+      "explicit": true,
+      "created_at": "2026-06-10T10:00:00.000Z",
+      "title": "Enterprise Authentication Architecture",
+      "card": {
+        "source_metadata": {"title": "Enterprise Authentication Architecture", "revision": "7", "updated_at": "2026-09-01T15:00:00Z"},
+        "catalog": {
+          "summary": "Architecture plan for enterprise identity migration from legacy passwords to SAML and SCIM.",
+          "search_text": "SAML migration Okta federation SCIM user provisioning enterprise SSO legacy tenant rollout identity provider cutover",
+          "topics": ["SAML", "SCIM", "enterprise SSO", "identity"],
+          "entities": ["Okta", "Project Phoenix"],
+          "tags": ["architecture", "security"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "SAML_ARCH_01"}
+      }
+    },
+    {
+      "label": "checkout_framing",
+      "uri": "https://docs.google.com/document/d/CHECKOUT_FRAME_02/edit",
+      "explicit": true,
+      "created_at": "2026-09-14T12:00:00.000Z",
+      "title": "Payments Checkout Overhaul Framing",
+      "card": {
+        "source_metadata": {"title": "Payments Checkout Overhaul Framing", "revision": "4"},
+        "catalog": {
+          "summary": "Problem framing and scope boundaries for the Q4 payments checkout redesign.",
+          "search_text": "checkout overhaul framing payments cart conversion stripe elements multi-currency tax calculation launch milestones",
+          "topics": ["checkout", "payments", "framing"],
+          "entities": ["Stripe", "Growth Team"],
+          "tags": ["framing", "q4"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "CHECKOUT_FRAME_02"}
+      }
+    },
+    {
+      "label": "api_doc_guidelines",
+      "uri": "https://docs.google.com/document/d/API_DOC_GUIDE_03/edit",
+      "explicit": true,
+      "created_at": "2026-10-20T09:00:00.000Z",
+      "title": "API Doc Style Guidelines",
+      "card": {
+        "source_metadata": {"title": "API Doc Style Guidelines", "revision": "2"},
+        "catalog": {
+          "summary": "Writing style guide for public REST API documentation across billing and payments endpoints.",
+          "search_text": "API documentation conventions OpenAPI examples error schemas versioning changelog payments endpoint docs",
+          "topics": ["documentation", "API"],
+          "entities": ["DevRel"],
+          "tags": ["style-guide", "docs"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "API_DOC_GUIDE_03"}
+      }
+    },
+    {
+      "label": "webhook_retry_rfc",
+      "uri": "https://docs.google.com/document/d/WEBHOOK_RFC_04/edit",
+      "explicit": true,
+      "created_at": "2026-08-22T14:30:00.000Z",
+      "title": "Webhook Retries and Delivery Guarantees RFC",
+      "card": {
+        "source_metadata": {"title": "Webhook Retries and Delivery Guarantees RFC", "revision": "5"},
+        "catalog": {
+          "summary": "Design for outbound webhook retries, exponential backoff, jitter, and dead-letter queues.",
+          "search_text": "outbound webhooks retries retrying exponential backoff jitter idempotency keys dead letter queue dlq circuit breaker delivery guarantees",
+          "topics": ["webhooks", "reliability", "queues"],
+          "entities": ["Event Bus"],
+          "tags": ["rfc", "backend"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "WEBHOOK_RFC_04"}
+      }
+    },
+    {
+      "label": "webhook_issue",
+      "uri": "https://github.com/acme/platform/issues/418",
+      "explicit": true,
+      "created_at": "2026-09-05T11:00:00.000Z",
+      "title": "Webhook retries storm downstream partners after 502 spikes",
+      "card": {
+        "source_metadata": {"title": "Webhook retries storm downstream partners after 502 spikes"},
+        "catalog": {
+          "summary": "GitHub issue tracking synchronized retry storms when partner webhook endpoints return 502.",
+          "search_text": "webhook retries thundering herd 502 partner outage missing jitter backoff bug report github issue",
+          "topics": ["webhooks", "bugs"],
+          "entities": ["acme/platform"],
+          "tags": ["bug", "p1"]
+        },
+        "retrieval": {"provider": "github", "external_id": "418"}
+      }
+    },
+    {
+      "label": "rate_limit_pr",
+      "uri": "https://github.com/acme/gateway/pull/912",
+      "explicit": true,
+      "created_at": "2026-10-01T16:45:00.000Z",
+      "title": "Implement token bucket rate limiter in edge gateway",
+      "card": {
+        "source_metadata": {"title": "Implement token bucket rate limiter in edge gateway"},
+        "catalog": {
+          "summary": "Pull request adding per-tenant token bucket rate limiter middleware with Redis counters.",
+          "search_text": "token bucket rate limiter limits throttling edge gateway middleware redis lua script burst quota 429",
+          "topics": ["rate-limiting", "gateway"],
+          "entities": ["acme/gateway", "Redis"],
+          "tags": ["pr", "performance"]
+        },
+        "retrieval": {"provider": "github", "external_id": "912"}
+      }
+    },
+    {
+      "label": "auth_sdk_repo",
+      "uri": "https://github.com/acme/auth-sdk",
+      "explicit": false,
+      "created_at": "2026-05-12T08:00:00.000Z",
+      "title": "acme/auth-sdk",
+      "card": {
+        "source_metadata": {"title": "acme/auth-sdk"},
+        "catalog": {
+          "summary": "Shared TypeScript and Rust client SDK for JWT verification and OAuth token refresh.",
+          "search_text": "auth sdk jwt verification jwks oauth2 refresh token client library",
+          "topics": ["authentication", "sdk"],
+          "entities": ["acme/auth-sdk"],
+          "tags": ["repo", "library"]
+        },
+        "retrieval": {"provider": "github", "external_id": "acme/auth-sdk"}
+      }
+    },
+    {
+      "label": "onboarding_figma",
+      "uri": "https://www.figma.com/design/ONBOARDING_FIG_08/Onboarding-Redesign",
+      "explicit": true,
+      "created_at": "2026-09-18T10:15:00.000Z",
+      "title": "Customer Onboarding Redesign",
+      "card": {
+        "source_metadata": {"title": "Customer Onboarding Redesign"},
+        "catalog": {
+          "summary": "Figma prototype for the self-serve workspace onboarding flow and checklist steps.",
+          "search_text": "onboarding redesign first-run experience welcome checklist team invite modal empty states figma prototype",
+          "topics": ["onboarding", "UX", "design"],
+          "entities": ["Design Systems"],
+          "tags": ["figma", "prototype"]
+        },
+        "retrieval": {"provider": "figma", "external_id": "ONBOARDING_FIG_08"}
+      }
+    },
+    {
+      "label": "onboarding_metrics_doc",
+      "uri": "https://docs.google.com/document/d/ONBOARDING_METRICS_09/edit",
+      "explicit": false,
+      "created_at": "2026-07-03T13:00:00.000Z",
+      "title": "Onboarding Funnel Drop-off Analysis",
+      "card": {
+        "source_metadata": {"title": "Onboarding Funnel Drop-off Analysis"},
+        "catalog": {
+          "summary": "Analytics review of signup activation rates and onboarding step drop-offs.",
+          "search_text": "onboarding funnel activation metrics cohort retention signup drop-off analytics",
+          "topics": ["onboarding", "analytics"],
+          "entities": ["Data Team"],
+          "tags": ["metrics"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "ONBOARDING_METRICS_09"}
+      }
+    },
+    {
+      "label": "design_tokens_figma",
+      "uri": "https://www.figma.com/file/TOKENS_FIG_10/Foundations-Tokens",
+      "explicit": true,
+      "created_at": "2026-08-01T11:20:00.000Z",
+      "title": "Design System Color and Typography Tokens",
+      "card": {
+        "source_metadata": {"title": "Design System Color and Typography Tokens"},
+        "catalog": {
+          "summary": "Canonical Figma variables for light/dark theme color palettes, spacing, and typography.",
+          "search_text": "design system tokens color palette dark mode contrast wcag typography spacing variables figma",
+          "topics": ["design-system", "accessibility"],
+          "entities": ["Design Systems"],
+          "tags": ["tokens", "ui"]
+        },
+        "retrieval": {"provider": "figma", "external_id": "TOKENS_FIG_10"}
+      }
+    },
+    {
+      "label": "session_cache_rfc",
+      "uri": "https://docs.google.com/document/d/SESSION_CACHE_11/edit",
+      "explicit": true,
+      "created_at": "2026-09-25T17:00:00.000Z",
+      "title": "Distributed Session Cache Strategy",
+      "card": {
+        "source_metadata": {"title": "Distributed Session Cache Strategy"},
+        "catalog": {
+          "summary": "Plan for moving browser sessions to a write-through Redis cache with TTL invalidation.",
+          "search_text": "session cache cached redis cluster ttl eviction invalidation read latency failover",
+          "topics": ["caching", "sessions", "redis"],
+          "entities": ["Core Infra"],
+          "tags": ["rfc", "infra"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "SESSION_CACHE_11"}
+      }
+    },
+    {
+      "label": "pg_pooling_doc",
+      "uri": "https://docs.google.com/document/d/PG_POOL_12/edit",
+      "explicit": true,
+      "created_at": "2026-09-10T09:30:00.000Z",
+      "title": "Postgres Connection Pooling with PgBouncer",
+      "card": {
+        "source_metadata": {"title": "Postgres Connection Pooling with PgBouncer"},
+        "catalog": {
+          "summary": "Transaction-mode pooling configuration and prepared statement tradeoffs for primary Postgres.",
+          "search_text": "postgres postgresql connection pooling pgbouncer transaction pooling max_connections idle timeouts",
+          "topics": ["postgres", "databases", "scaling"],
+          "entities": ["PgBouncer", "Core Infra"],
+          "tags": ["database"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "PG_POOL_12"}
+      }
+    },
+    {
+      "label": "pg_backup_runbook",
+      "uri": "https://www.notion.so/Postgres-Backup-Restore-0123456789abcdef0123456789abcdef",
+      "explicit": true,
+      "created_at": "2026-06-20T14:00:00.000Z",
+      "title": "Postgres Backup and Point-in-Time Restore Runbook",
+      "card": {
+        "source_metadata": {"title": "Postgres Backup and Point-in-Time Restore Runbook"},
+        "catalog": {
+          "summary": "Operational runbook for WAL archiving, snapshot verification, and point-in-time recovery.",
+          "search_text": "postgres backup restore pitr wal archiving disaster recovery snapshot verification runbook",
+          "topics": ["postgres", "backups", "runbook"],
+          "entities": ["SRE"],
+          "tags": ["ops", "dr"]
+        },
+        "retrieval": {"provider": "notion", "external_id": "0123456789abcdef0123456789abcdef"}
+      }
+    },
+    {
+      "label": "incident_playbook",
+      "uri": "https://www.notion.so/Incident-Escalation-Handbook-fedcba9876543210fedcba9876543210",
+      "explicit": true,
+      "created_at": "2026-08-12T10:00:00.000Z",
+      "title": "Incident Escalation and On-Call Playbook",
+      "card": {
+        "source_metadata": {"title": "Incident Escalation and On-Call Playbook"},
+        "catalog": {
+          "summary": "Severity definitions, paging escalation paths, incident commander roles, and status page updates.",
+          "search_text": "incident escalation on-call playbook sev1 sev2 pagerduty incident commander communications status page",
+          "topics": ["incidents", "on-call"],
+          "entities": ["PagerDuty", "SRE"],
+          "tags": ["playbook", "ops"]
+        },
+        "retrieval": {"provider": "notion", "external_id": "fedcba9876543210fedcba9876543210"}
+      }
+    },
+    {
+      "label": "arch_review_slides",
+      "uri": "https://docs.google.com/presentation/d/ARCH_DECK_15/edit",
+      "explicit": true,
+      "created_at": "2026-10-08T15:00:00.000Z",
+      "title": "Q4 Platform Architecture Review Deck",
+      "card": {
+        "source_metadata": {"title": "Q4 Platform Architecture Review Deck"},
+        "catalog": {
+          "summary": "Slide deck reviewing multi-region failover, event bus throughput, and cost targets for Q4.",
+          "search_text": "architecture review presentation deck slides multi-region failover throughput roadmap quarterly review",
+          "topics": ["architecture", "roadmap"],
+          "entities": ["Platform Engineering"],
+          "tags": ["slides", "q4"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "ARCH_DECK_15"}
+      }
+    },
+    {
+      "label": "budget_sheet",
+      "uri": "https://docs.google.com/spreadsheets/d/BUDGET_SHEET_16/edit",
+      "explicit": true,
+      "created_at": "2026-10-12T08:30:00.000Z",
+      "title": "FY27 Infrastructure Budget and Forecast",
+      "card": {
+        "source_metadata": {"title": "FY27 Infrastructure Budget and Forecast"},
+        "catalog": {
+          "summary": "Cloud spend spreadsheet tracking AWS compute, RDS storage, and quarterly forecasts.",
+          "search_text": "infrastructure budget cloud spend forecast spreadsheet aws ec2 rds savings plans headcount cost model",
+          "topics": ["budget", "cloud-cost"],
+          "entities": ["AWS", "Finance"],
+          "tags": ["spreadsheet", "planning"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "BUDGET_SHEET_16"}
+      }
+    },
+    {
+      "label": "outage_slack",
+      "uri": "https://acme.slack.com/archives/C04INCIDENT/p1728400100123456",
+      "explicit": true,
+      "created_at": "2026-10-09T19:00:00.000Z",
+      "title": "Slack thread: Oct 9 API latency spike and outage mitigation",
+      "card": {
+        "source_metadata": {"title": "Slack thread: Oct 9 API latency spike and outage mitigation"},
+        "catalog": {
+          "summary": "Live incident thread diagnosing p99 latency spike caused by noisy neighbor batch exports.",
+          "search_text": "slack thread outage latency spike p99 noisy neighbor batch export mitigation rollback",
+          "topics": ["outage", "latency", "incidents"],
+          "entities": ["API Gateway"],
+          "tags": ["slack", "incident"]
+        },
+        "retrieval": {"provider": "slack", "external_id": "p1728400100123456"}
+      }
+    },
+    {
+      "label": "payment_postmortem",
+      "uri": "https://docs.google.com/document/d/PAY_POSTMORTEM_18/edit",
+      "explicit": true,
+      "created_at": "2026-09-29T16:00:00.000Z",
+      "title": "September Payment Gateway Timeout Postmortem",
+      "card": {
+        "source_metadata": {"title": "September Payment Gateway Timeout Postmortem"},
+        "catalog": {
+          "summary": "Root cause analysis of checkout authorization timeouts during processor TLS certificate rotation.",
+          "search_text": "payment gateway timeout postmortem root cause tls certificate rotation checkout failures remediation",
+          "topics": ["payments", "postmortem"],
+          "entities": ["Stripe"],
+          "tags": ["postmortem", "incident"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "PAY_POSTMORTEM_18"}
+      }
+    },
+    {
+      "label": "canary_runbook_local",
+      "uri": "/workspace/ops/canary-deployment-runbook.md",
+      "explicit": true,
+      "created_at": "2026-10-05T11:00:00.000Z",
+      "title": "Canary Deployment Rollout Runbook",
+      "card": {
+        "source_metadata": {"title": "Canary Deployment Rollout Runbook"},
+        "catalog": {
+          "summary": "Local markdown checklist for progressive canary deployments, error budget gates, and automated rollback.",
+          "search_text": "canary deployment deployed rollout progressive delivery error budget automated rollback helm runbook",
+          "topics": ["deployments", "canary", "runbook"],
+          "entities": ["Kubernetes"],
+          "tags": ["local", "ops"]
+        },
+        "retrieval": {"provider": "filesystem", "external_id": "/workspace/ops/canary-deployment-runbook.md"}
+      }
+    },
+    {
+      "label": "fts5_web_ref",
+      "uri": "https://www.sqlite.org/fts5.html",
+      "explicit": true,
+      "created_at": "2026-08-30T12:00:00.000Z",
+      "title": "SQLite FTS5 Extension Reference",
+      "card": {
+        "source_metadata": {"title": "SQLite FTS5 Extension Reference"},
+        "catalog": {
+          "summary": "Official SQLite documentation for FTS5 tokenizers, porter stemming, and BM25 ranking.",
+          "search_text": "sqlite fts5 full-text search porter tokenizer unicode61 bm25 ranking auxiliary functions",
+          "topics": ["sqlite", "fts5", "search"],
+          "entities": ["SQLite"],
+          "tags": ["reference", "docs"]
+        },
+        "retrieval": {"provider": "web"}
+      }
+    },
+    {
+      "label": "pointer_only_spec",
+      "uri": "https://docs.google.com/document/d/UNINDEXED_21/edit",
+      "explicit": true,
+      "created_at": "2026-10-22T10:00:00.000Z",
+      "title": "Q1 Search Ranking Spec",
+      "card": null
+    },
+    {
+      "label": "implicit_old_notes",
+      "uri": "https://docs.google.com/document/d/OLD_NOTES_22/edit",
+      "explicit": false,
+      "created_at": "2026-01-15T10:00:00.000Z",
+      "title": "Scratch Notes on Checkout Ideas",
+      "card": {
+        "source_metadata": {"title": "Scratch Notes on Checkout Ideas"},
+        "catalog": {
+          "summary": "Early brainstorm notes mentioning checkout framing and payment experiments.",
+          "search_text": "checkout framing brainstorm rough ideas payment experiments",
+          "topics": ["checkout"],
+          "entities": [],
+          "tags": ["scratch"]
+        },
+        "retrieval": {"provider": "google_drive", "external_id": "OLD_NOTES_22"}
+      }
+    }
+  ],
+  "queries": [
+    {
+      "id": "exact_url_alias",
+      "category": "exact",
+      "query": "https://docs.google.com/document/d/SAML_ARCH_01/view",
+      "expected_top1": "saml_arch",
+      "expected_any": ["saml_arch"]
+    },
+    {
+      "id": "exact_canonical_key",
+      "category": "exact",
+      "query": "github:pr:acme/gateway:912",
+      "expected_top1": "rate_limit_pr",
+      "expected_any": ["rate_limit_pr"]
+    },
+    {
+      "id": "exact_title",
+      "category": "exact",
+      "query": "Q1 Search Ranking Spec",
+      "expected_top1": "pointer_only_spec",
+      "expected_any": ["pointer_only_spec"]
+    },
+    {
+      "id": "exact_external_id",
+      "category": "exact",
+      "query": "ONBOARDING_FIG_08",
+      "expected_top1": "onboarding_figma",
+      "expected_any": ["onboarding_figma"]
+    },
+    {
+      "id": "vague_framing_checkout",
+      "category": "vague_conversational",
+      "query": "my framing doc for checkout",
+      "expected_top1": "checkout_framing",
+      "expected_any": ["checkout_framing"]
+    },
+    {
+      "id": "vague_saml_migration",
+      "category": "vague_conversational",
+      "query": "where is the doc about migrating to SAML",
+      "expected_top1": "saml_arch",
+      "expected_any": ["saml_arch"]
+    },
+    {
+      "id": "vague_onboarding_figma",
+      "category": "vague_conversational",
+      "query": "find that figma file for the onboarding redesign",
+      "expected_top1": "onboarding_figma",
+      "expected_any": ["onboarding_figma"]
+    },
+    {
+      "id": "vague_webhook_issue",
+      "category": "vague_conversational",
+      "query": "the github issue about webhook retries",
+      "expected_top1": "webhook_issue",
+      "expected_any": ["webhook_issue"]
+    },
+    {
+      "id": "vague_incident_playbook",
+      "category": "vague_conversational",
+      "query": "our incident escalation playbook",
+      "expected_top1": "incident_playbook",
+      "expected_any": ["incident_playbook"]
+    },
+    {
+      "id": "vague_arch_deck",
+      "category": "vague_conversational",
+      "query": "what was that deck for architecture review",
+      "expected_top1": "arch_review_slides",
+      "expected_any": ["arch_review_slides"]
+    },
+    {
+      "id": "stem_webhook_retry_design",
+      "category": "stemming",
+      "query": "webhook retry design",
+      "expected_top1": "webhook_retry_rfc",
+      "expected_any": ["webhook_retry_rfc"]
+    },
+    {
+      "id": "stem_migrating_identities",
+      "category": "stemming",
+      "query": "migrating identities",
+      "expected_top1": "saml_arch",
+      "expected_any": ["saml_arch"]
+    },
+    {
+      "id": "stem_rotating_certificates",
+      "category": "stemming",
+      "query": "rotating certificates",
+      "expected_top1": "payment_postmortem",
+      "expected_any": ["payment_postmortem"]
+    },
+    {
+      "id": "stem_configuring_pools",
+      "category": "stemming",
+      "query": "configuring connection pools",
+      "expected_top1": "pg_pooling_doc",
+      "expected_any": ["pg_pooling_doc"]
+    },
+    {
+      "id": "stem_caching_sessions",
+      "category": "stemming",
+      "query": "caching strategy for sessions",
+      "expected_top1": "session_cache_rfc",
+      "expected_any": ["session_cache_rfc"]
+    },
+    {
+      "id": "stem_rate_limiting",
+      "category": "stemming",
+      "query": "rate limiting middleware",
+      "expected_top1": "rate_limit_pr",
+      "expected_any": ["rate_limit_pr"]
+    },
+    {
+      "id": "stem_deploying_canary",
+      "category": "stemming",
+      "query": "deploying canary rollouts",
+      "expected_top1": "canary_runbook_local",
+      "expected_any": ["canary_runbook_local"]
+    },
+    {
+      "id": "stem_budgeting_forecasts",
+      "category": "stemming",
+      "query": "budgeting cloud forecasts",
+      "expected_top1": "budget_sheet",
+      "expected_any": ["budget_sheet"]
+    },
+    {
+      "id": "precision_framing_payments_doc",
+      "category": "precision",
+      "query": "framing doc for payments checkout",
+      "expected_top1": "checkout_framing",
+      "expected_any": ["checkout_framing"]
+    },
+    {
+      "id": "precision_pg_pooling",
+      "category": "precision",
+      "query": "postgres connection pooling",
+      "expected_top1": "pg_pooling_doc",
+      "expected_any": ["pg_pooling_doc"]
+    },
+    {
+      "id": "precision_slack_outage",
+      "category": "precision",
+      "query": "slack thread about outage latency",
+      "expected_top1": "outage_slack",
+      "expected_any": ["outage_slack"]
+    },
+    {
+      "id": "precision_color_tokens",
+      "category": "precision",
+      "query": "design system color tokens",
+      "expected_top1": "design_tokens_figma",
+      "expected_any": ["design_tokens_figma"]
+    },
+    {
+      "id": "precision_sqlite_bm25",
+      "category": "precision",
+      "query": "sqlite bm25 tokenizer reference",
+      "expected_top1": "fts5_web_ref",
+      "expected_any": ["fts5_web_ref"]
+    },
+    {
+      "id": "precision_stopword_only_noise",
+      "category": "precision",
+      "query": "where is the retry backoff",
+      "expected_top1": "webhook_retry_rfc",
+      "expected_any": ["webhook_retry_rfc", "webhook_issue"]
+    },
+    {
+      "id": "filter_onboarding_figma",
+      "category": "filtered",
+      "query": "onboarding",
+      "filters": {"provider": "figma"},
+      "expected_top1": "onboarding_figma",
+      "expected_any": ["onboarding_figma"]
+    },
+    {
+      "id": "filter_webhook_github_issue",
+      "category": "filtered",
+      "query": "webhook",
+      "filters": {"kind": "github_issue"},
+      "expected_top1": "webhook_issue",
+      "expected_any": ["webhook_issue"]
+    },
+    {
+      "id": "filter_saml_topic",
+      "category": "filtered",
+      "query": "migration",
+      "filters": {"topic": "SAML"},
+      "expected_top1": "saml_arch",
+      "expected_any": ["saml_arch"]
+    },
+    {
+      "id": "filter_runbook_filesystem",
+      "category": "filtered",
+      "query": "runbook",
+      "filters": {"provider": "filesystem"},
+      "expected_top1": "canary_runbook_local",
+      "expected_any": ["canary_runbook_local"]
+    },
+    {
+      "id": "lexical_gap_synonym_only",
+      "category": "lexical_boundary",
+      "query": "billing meltdown",
+      "expected_top1": "payment_postmortem",
+      "expected_any": ["payment_postmortem"],
+      "expected_lexical_miss": true,
+      "notes": "Intentional pure-synonym gap where neither 'billing' nor 'meltdown' appears in the payment_postmortem card; tracks boundary evidence for Issue #16."
+    }
+  ]
+}
