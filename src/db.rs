@@ -1,9 +1,10 @@
 use crate::canonical::{self, Identity};
 use crate::migrations::{self, CURRENT_SCHEMA_VERSION};
 use crate::model::{Artifact, ArtifactState, IndexInput, SearchCard, SearchFilters};
+use crate::storage::{self, ARTIFACT_SELECT_COLUMNS, ArtifactRow, FTS_BM25_WEIGHTS};
 use anyhow::{Context, bail};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
@@ -74,8 +75,6 @@ pub struct StatsReport {
     pub top_accessed: Vec<TopAccessedArtifact>,
     pub semantic_search: bool,
 }
-
-const FTS_BM25_WEIGHTS: &str = "bm25(artifact_fts, 0.0, 8.0, 3.0, 1.5, 2.5, 2.5, 1.5)";
 
 const STOPWORDS: &[&str] = &[
     "a", "about", "after", "am", "an", "and", "any", "are", "as", "at", "be", "been", "before",
@@ -185,7 +184,7 @@ impl Registry {
             let current = load_artifact(&tx, &id)?;
             apply_index(&tx, &current, input, &now)?;
         } else {
-            update_fts(&tx, &id)?;
+            storage::upsert_fts(&tx, &id)?;
         }
         tx.commit()?;
         self.get_optional(&id)?.context("new artifact disappeared")
@@ -392,17 +391,9 @@ impl Registry {
 
     fn reindex_inner(&mut self) -> anyhow::Result<usize> {
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM artifact_fts", [])?;
-        let ids = {
-            let mut stmt = tx.prepare("SELECT id FROM artifacts")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        for id in &ids {
-            update_fts(&tx, id)?;
-        }
+        let count = storage::rebuild_all_fts(&tx)?;
         tx.commit()?;
-        Ok(ids.len())
+        Ok(count)
     }
 
     pub fn doctor(&self) -> Result<DoctorReport> {
@@ -416,20 +407,8 @@ impl Registry {
         let schema_version: i64 = self
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))?;
-        let foreign_key_integrity = self
-            .conn
-            .query_row("PRAGMA foreign_key_check", [], |row| {
-                row.get::<_, String>(0)
-            })
-            .optional()?
-            .is_none();
-        let fts_integrity = self
-            .conn
-            .execute(
-                "INSERT INTO artifact_fts(artifact_fts) VALUES('integrity-check')",
-                [],
-            )
-            .is_ok();
+        let foreign_key_integrity = storage::check_foreign_keys(&self.conn)?.is_none();
+        let fts_integrity = storage::check_fts_integrity(&self.conn).is_ok();
         let artifacts: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM artifacts", [], |row| row.get(0))?;
@@ -584,69 +563,27 @@ fn json_string(value: &Option<Value>) -> anyhow::Result<Option<String>> {
         .map_err(Into::into)
 }
 
-fn parse_json(value: Option<String>) -> Option<Value> {
-    value.and_then(|s| serde_json::from_str(&s).ok())
-}
-
-fn artifact_row(row: &Row<'_>) -> rusqlite::Result<Artifact> {
-    Ok(Artifact {
-        id: row.get(0)?,
-        canonical_key: row.get(1)?,
-        kind: row.get(2)?,
-        provider: row.get(3)?,
-        state: row.get(4)?,
-        primary_uri: row.get(5)?,
-        title: row.get(6)?,
-        summary: row.get(7)?,
-        search_text: row.get(8)?,
-        source_external_id: row.get(9)?,
-        source_revision: row.get(10)?,
-        source_updated_at: row.get(11)?,
-        retrieval: parse_json(row.get(12)?),
-        source_metadata: parse_json(row.get(13)?),
-        catalog_metadata: parse_json(row.get(14)?),
-        provenance: parse_json(row.get(15)?),
-        is_explicitly_saved: row.get(16)?,
-        access_count: row.get(17)?,
-        last_accessed_at: row.get(18)?,
-        topics: Vec::new(),
-        entities: Vec::new(),
-        tags: Vec::new(),
-        aliases: Vec::new(),
-        created_at: row.get(19)?,
-        updated_at: row.get(20)?,
-        last_seen_at: row.get(21)?,
-        last_indexed_at: row.get(22)?,
-    })
-}
-
 fn load_artifact(conn: &Connection, id: &str) -> anyhow::Result<Artifact> {
-    let mut artifact: Artifact = conn.query_row(
-        "SELECT id, canonical_key, kind, provider, state, primary_uri, title, summary,
-                search_text, source_external_id, source_revision, source_updated_at,
-                retrieval_json, source_metadata_json, catalog_metadata_json, provenance_json,
-                is_explicitly_saved, access_count, last_accessed_at,
-                created_at, updated_at, last_seen_at, last_indexed_at
-         FROM artifacts WHERE id=?1",
-        [id],
-        artifact_row,
-    )?;
-    artifact.topics = strings(
+    let sql = format!("SELECT {ARTIFACT_SELECT_COLUMNS} FROM artifacts WHERE id=?1");
+    let mut artifact = conn
+        .query_row(&sql, [id], ArtifactRow::from_row)?
+        .into_artifact();
+    artifact.topics = storage::load_strings(
         conn,
         "SELECT topic FROM topics WHERE artifact_id=?1 ORDER BY topic",
         id,
     )?;
-    artifact.entities = strings(
+    artifact.entities = storage::load_strings(
         conn,
         "SELECT entity FROM entities WHERE artifact_id=?1 ORDER BY entity",
         id,
     )?;
-    artifact.tags = strings(
+    artifact.tags = storage::load_strings(
         conn,
         "SELECT tag FROM tags WHERE artifact_id=?1 ORDER BY tag",
         id,
     )?;
-    artifact.aliases = strings(
+    artifact.aliases = storage::load_strings(
         conn,
         "SELECT uri FROM aliases WHERE artifact_id=?1 ORDER BY uri",
         id,
@@ -785,15 +722,8 @@ fn apply_index(
     replace_strings(tx, "topics", "topic", &old.id, &input.catalog.topics)?;
     replace_strings(tx, "entities", "entity", &old.id, &input.catalog.entities)?;
     replace_strings(tx, "tags", "tag", &old.id, &input.catalog.tags)?;
-    update_fts(tx, &old.id)?;
+    storage::upsert_fts(tx, &old.id)?;
     Ok(())
-}
-
-fn strings(conn: &Connection, sql: &str, id: &str) -> anyhow::Result<Vec<String>> {
-    let mut stmt = conn.prepare(sql)?;
-    Ok(stmt
-        .query_map([id], |row| row.get(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 fn add_alias(tx: &Transaction<'_>, uri: &str, id: &str, now: &str) -> anyhow::Result<()> {
@@ -829,25 +759,6 @@ fn replace_strings(
     for value in values.iter().map(|v| v.trim()).filter(|v| !v.is_empty()) {
         tx.execute(&insert, params![id, value])?;
     }
-    Ok(())
-}
-
-fn update_fts(tx: &Transaction<'_>, id: &str) -> anyhow::Result<()> {
-    tx.execute("DELETE FROM artifact_fts WHERE artifact_id=?1", [id])?;
-    let (title, summary, search_text): (Option<String>, Option<String>, Option<String>) = tx
-        .query_row(
-            "SELECT title, summary, search_text FROM artifacts WHERE id=?1",
-            [id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-    let topics = strings(tx, "SELECT topic FROM topics WHERE artifact_id=?1", id)?.join(" ");
-    let entities = strings(tx, "SELECT entity FROM entities WHERE artifact_id=?1", id)?.join(" ");
-    let tags = strings(tx, "SELECT tag FROM tags WHERE artifact_id=?1", id)?.join(" ");
-    tx.execute(
-        "INSERT INTO artifact_fts(artifact_id, title, summary, search_text, topics, entities, tags)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![id, title, summary, search_text, topics, entities, tags],
-    )?;
     Ok(())
 }
 
