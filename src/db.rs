@@ -1,4 +1,4 @@
-use crate::canonical::{Identity, identify};
+use crate::canonical::{self, Identity};
 use crate::migrations::{self, CURRENT_SCHEMA_VERSION};
 use crate::model::{Artifact, ArtifactState, IndexInput, SearchCard, SearchFilters};
 use anyhow::{Context, bail};
@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -90,6 +90,7 @@ const STOPWORDS: &[&str] = &[
 
 pub struct Registry {
     conn: Connection,
+    base_dir: Option<PathBuf>,
 }
 
 impl Registry {
@@ -99,6 +100,18 @@ impl Registry {
 
     pub fn open_in_memory() -> Result<Self> {
         Self::open_memory().map_err(Error::Database)
+    }
+
+    pub fn with_base_dir(mut self, base_dir: impl Into<PathBuf>) -> Self {
+        self.base_dir = Some(base_dir.into());
+        self
+    }
+
+    fn identify_locator(&self, input: &str) -> anyhow::Result<Identity> {
+        match self.base_dir.as_deref() {
+            Some(base) => canonical::identify_with_base(input, base),
+            None => canonical::identify(input),
+        }
     }
 
     fn open_disk(path: &Path) -> anyhow::Result<Self> {
@@ -124,7 +137,10 @@ impl Registry {
             "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
         )?;
         migrations::migrate(&mut conn, path)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            base_dir: None,
+        })
     }
 
     fn open_memory() -> anyhow::Result<Self> {
@@ -133,7 +149,10 @@ impl Registry {
             "PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
         )?;
         migrations::migrate(&mut conn, Path::new(":memory:"))?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            base_dir: None,
+        })
     }
 
     pub fn add(
@@ -143,7 +162,7 @@ impl Registry {
         explicitly_saved: bool,
         index: Option<IndexInput>,
     ) -> Result<Artifact> {
-        let identity = identify(uri).map_err(Error::InvalidInput)?;
+        let identity = self.identify_locator(uri).map_err(Error::InvalidInput)?;
         if let Some(ref input) = index {
             input.validate().map_err(Error::InvalidInput)?;
         }
@@ -298,12 +317,12 @@ impl Registry {
         let mut exact_locator_match = false;
         if let Some(artifact) = self.get_optional(query)? {
             push_card(&mut results, &mut seen, artifact, 1.0, filters);
-            exact_locator_match = is_locator_or_key(query);
-        } else if let Ok(identity) = identify(query)
+            exact_locator_match = canonical::is_locator_or_key(query);
+        } else if let Ok(identity) = self.identify_locator(query)
             && let Some(artifact) = self.get_optional(&identity.canonical_key)?
         {
             push_card(&mut results, &mut seen, artifact, 1.0, filters);
-            exact_locator_match = is_locator_or_key(query);
+            exact_locator_match = canonical::is_locator_or_key(query);
         }
         if exact_locator_match {
             results.truncate(limit);
@@ -539,7 +558,7 @@ impl Registry {
         if alias.is_some() {
             return Ok(alias);
         }
-        if let Ok(Identity { canonical_key, .. }) = identify(key) {
+        if let Ok(Identity { canonical_key, .. }) = self.identify_locator(key) {
             return Ok(self
                 .conn
                 .query_row(
@@ -842,52 +861,6 @@ fn push_card(
     if filters.allows(&artifact) && seen.insert(artifact.id.clone()) {
         results.push(SearchCard::from_artifact(&artifact, score));
     }
-}
-
-fn is_locator_or_key(query: &str) -> bool {
-    let lower = query.to_ascii_lowercase();
-    lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("file://")
-        || query.starts_with("art_")
-        || [
-            "gdrive:",
-            "figma:",
-            "github:",
-            "notion:",
-            "slack:",
-            "jira:",
-            "linear:",
-            "confluence:",
-            "web:",
-            "file:",
-        ]
-        .iter()
-        .any(|prefix| lower.starts_with(prefix))
-        || is_filesystem_path_locator(query)
-}
-
-fn is_filesystem_path_locator(query: &str) -> bool {
-    if query.starts_with('/')
-        || query.starts_with('\\')
-        || query.starts_with("./")
-        || query.starts_with("../")
-        || query.starts_with(".\\")
-        || query.starts_with("..\\")
-        || query.starts_with("~/")
-        || query.starts_with("~\\")
-    {
-        return true;
-    }
-    let bytes = query.as_bytes();
-    if bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && (bytes[2] == b'\\' || bytes[2] == b'/')
-    {
-        return true;
-    }
-    !query.chars().any(char::is_whitespace) && (query.contains('/') || query.contains('\\'))
 }
 
 fn query_terms(query: &str) -> Vec<String> {
@@ -1482,14 +1455,5 @@ mod tests {
         let prose = db.search("light/dark theme", 10, &filters).unwrap();
         assert_eq!(prose.len(), 1);
         assert_ne!(prose[0].id, local.id);
-
-        assert!(is_filesystem_path_locator("/tmp/file.md"));
-        assert!(is_filesystem_path_locator("./docs/design.md"));
-        assert!(is_filesystem_path_locator("../README.md"));
-        assert!(is_filesystem_path_locator("docs/design.md"));
-        assert!(is_filesystem_path_locator(r"C:\Users\dev\notes.md"));
-        assert!(is_filesystem_path_locator(r"\\server\share\notes.md"));
-        assert!(!is_filesystem_path_locator("roadmap"));
-        assert!(!is_filesystem_path_locator("light/dark theme"));
     }
 }

@@ -116,3 +116,28 @@ fn in_memory_registry_exercises_typed_seam_and_errors() {
         Err(Error::NotFound { .. })
     ));
 }
+
+#[test]
+fn in_memory_registry_with_base_dir_deduplicates_relative_paths() {
+    let dir = std::env::temp_dir().join(format!("artmark-reg-base-{}", uuid::Uuid::now_v7()));
+    let docs = dir.join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    let spec = dir.join("spec.md");
+    std::fs::write(&spec, "# Spec\n").unwrap();
+
+    let mut reg = Registry::open_in_memory().unwrap().with_base_dir(&dir);
+    let first = reg.add("spec.md", None, true, None).unwrap();
+    let second = reg.add("./spec.md", None, false, None).unwrap();
+    let third = reg.add("docs/../spec.md", None, false, None).unwrap();
+    assert_eq!(second.id, first.id);
+    assert_eq!(third.id, first.id);
+    assert_eq!(third.aliases.len(), 3);
+
+    let hits = reg
+        .search("./spec.md", 10, &SearchFilters::default())
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, first.id);
+
+    std::fs::remove_dir_all(dir).unwrap();
+}

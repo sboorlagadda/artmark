@@ -2,6 +2,19 @@ use anyhow::{Result, bail};
 use std::path::{Component, Path, PathBuf};
 use url::Url;
 
+pub const CANONICAL_KEY_PREFIXES: &[&str] = &[
+    "gdrive:",
+    "figma:",
+    "github:",
+    "notion:",
+    "slack:",
+    "jira:",
+    "linear:",
+    "confluence:",
+    "web:",
+    "file:",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
     pub canonical_key: String,
@@ -12,18 +25,26 @@ pub struct Identity {
 }
 
 pub fn identify(input: &str) -> Result<Identity> {
+    identify_internal(input, None)
+}
+
+pub fn identify_with_base(input: &str, base_dir: &Path) -> Result<Identity> {
+    identify_internal(input, Some(base_dir))
+}
+
+fn identify_internal(input: &str, base_dir: Option<&Path>) -> Result<Identity> {
     crate::credentials::validate(input)?;
     let input = input.trim();
     if input.is_empty() {
         bail!("artifact URI cannot be empty");
     }
     if input.starts_with("//") || is_windows_path(input) {
-        return local_path(Path::new(input), input);
+        return local_path(Path::new(input), input, base_dir);
     }
     let mut url = match Url::parse(input) {
         Ok(url) => url,
         Err(url::ParseError::RelativeUrlWithoutBase) => {
-            return local_path(Path::new(input), input);
+            return local_path(Path::new(input), input, base_dir);
         }
         Err(error) => return Err(error.into()),
     };
@@ -31,7 +52,7 @@ pub fn identify(input: &str) -> Result<Identity> {
         let path = url
             .to_file_path()
             .map_err(|_| anyhow::anyhow!("invalid file URI"))?;
-        return local_path(&path, input);
+        return local_path(&path, input, base_dir);
     }
     if !matches!(url.scheme(), "http" | "https") {
         bail!("only HTTP(S) URLs and local paths are supported");
@@ -511,6 +532,34 @@ fn known_identity(key: String, kind: &str, provider: &str, id: &str, uri: &str) 
     }
 }
 
+pub fn is_locator_or_key(query: &str) -> bool {
+    let lower = query.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("file://")
+        || query.starts_with("art_")
+        || CANONICAL_KEY_PREFIXES
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+        || is_filesystem_path_locator(query)
+}
+
+pub fn is_filesystem_path_locator(query: &str) -> bool {
+    if query.starts_with('/')
+        || query.starts_with('\\')
+        || query.starts_with("./")
+        || query.starts_with("../")
+        || query.starts_with(".\\")
+        || query.starts_with("..\\")
+        || query.starts_with("~/")
+        || query.starts_with("~\\")
+        || is_windows_path(query)
+    {
+        return true;
+    }
+    !query.chars().any(char::is_whitespace) && (query.contains('/') || query.contains('\\'))
+}
+
 fn is_windows_path(input: &str) -> bool {
     let bytes = input.as_bytes();
     let is_drive_path = bytes.len() >= 3
@@ -537,9 +586,11 @@ fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
     path
 }
 
-fn local_path(path: &Path, original: &str) -> Result<Identity> {
+fn local_path(path: &Path, original: &str, base_dir: Option<&Path>) -> Result<Identity> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
+    } else if let Some(base) = base_dir {
+        base.join(path)
     } else {
         std::env::current_dir()?.join(path)
     };
@@ -574,7 +625,9 @@ fn local_path(path: &Path, original: &str) -> Result<Identity> {
 
 #[cfg(test)]
 mod tests {
-    use super::identify;
+    use super::{identify, identify_with_base, is_filesystem_path_locator, is_locator_or_key};
+    use std::fs;
+    use uuid::Uuid;
 
     #[test]
     fn google_doc_views_share_identity() {
@@ -748,5 +801,90 @@ mod tests {
             assert_eq!(identity.provider.as_deref(), Some("filesystem"), "{path}");
             assert_eq!(identity.kind, "local_file", "{path}");
         }
+    }
+
+    #[test]
+    fn locator_and_key_classifiers_cover_all_prefixes_paths_and_prose() {
+        for locator in [
+            "https://example.com/doc",
+            "http://example.com/doc",
+            "file:///tmp/doc.md",
+            "art_01950000000070008000000000000001",
+            "gdrive:doc:ABC",
+            "figma:file:XYZ",
+            "github:repo:foo/bar",
+            "notion:page:0123456789abcdef0123456789abcdef",
+            "slack:thread:acme.slack.com:C123:p1700000000123456",
+            "jira:issue:acme.atlassian.net:ENG-1",
+            "linear:issue:acme:ENG-2",
+            "confluence:page:acme.atlassian.net:12345",
+            "web:https://example.com/doc",
+            "file:/tmp/doc.md",
+            "/tmp/file.md",
+            "./docs/design.md",
+            "../README.md",
+            "docs/design.md",
+            r"C:\Users\dev\notes.md",
+            r"\\server\share\notes.md",
+        ] {
+            assert!(is_locator_or_key(locator), "expected locator: {locator}");
+        }
+
+        assert!(is_filesystem_path_locator("/tmp/file.md"));
+        assert!(is_filesystem_path_locator("./docs/design.md"));
+        assert!(is_filesystem_path_locator("../README.md"));
+        assert!(is_filesystem_path_locator("docs/design.md"));
+        assert!(is_filesystem_path_locator(r"C:\Users\dev\notes.md"));
+        assert!(is_filesystem_path_locator(r"\\server\share\notes.md"));
+        assert!(!is_filesystem_path_locator("roadmap"));
+        assert!(!is_filesystem_path_locator("light/dark theme"));
+        assert!(!is_locator_or_key("roadmap"));
+        assert!(!is_locator_or_key("light/dark theme"));
+    }
+
+    #[test]
+    fn supported_providers_produce_recognized_canonical_keys() {
+        for uri in [
+            "https://docs.google.com/document/d/ABC/edit",
+            "https://www.figma.com/design/FILEKEY/Title",
+            "https://github.com/org/repo/pull/42",
+            "https://www.notion.so/Title-0123456789abcdef0123456789abcdef",
+            "https://acme.slack.com/archives/C01234567/p1700000000123456",
+            "https://acme.atlassian.net/browse/ENG-123",
+            "https://linear.app/acme/issue/ENG-42",
+            "https://acme.atlassian.net/wiki/spaces/ENG/pages/123456789/Overview",
+            "https://example.com/article",
+            "/tmp/local-note.md",
+        ] {
+            let identity = identify(uri).unwrap();
+            assert!(
+                is_locator_or_key(&identity.canonical_key),
+                "unrecognized key {} for {uri}",
+                identity.canonical_key
+            );
+        }
+    }
+
+    #[test]
+    fn identify_with_base_resolves_relative_paths_deterministically() {
+        let root = std::env::temp_dir().join(format!("artmark-canon-base-{}", Uuid::now_v7()));
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        let spec = root.join("spec.md");
+        fs::write(&spec, "# Spec\n").unwrap();
+
+        let from_root_bare = identify_with_base("spec.md", &root).unwrap();
+        let from_root_dot = identify_with_base("./spec.md", &root).unwrap();
+        let from_root_parent = identify_with_base("docs/../spec.md", &root).unwrap();
+        let from_docs = identify_with_base("../spec.md", &docs).unwrap();
+        let from_abs = identify_with_base(spec.to_str().unwrap(), &docs).unwrap();
+
+        assert_eq!(from_root_bare.canonical_key, from_root_dot.canonical_key);
+        assert_eq!(from_root_bare.canonical_key, from_root_parent.canonical_key);
+        assert_eq!(from_root_bare.canonical_key, from_docs.canonical_key);
+        assert_eq!(from_root_bare.canonical_key, from_abs.canonical_key);
+        assert_eq!(from_root_bare.kind, "local_file");
+
+        fs::remove_dir_all(root).unwrap();
     }
 }
