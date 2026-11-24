@@ -1,5 +1,8 @@
 use crate::canonical::{Identity, identify};
 use crate::model::ArtifactState;
+use crate::storage::{
+    self, ARTIFACT_SELECT_COLUMNS, ArtifactRow, CREATE_FTS_V1_SQL, CREATE_FTS_V2_SQL,
+};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -111,8 +114,9 @@ fn migrate_with(conn: &mut Connection, db_path: &Path, migrations: &[Migration])
 
         let step_result: Result<()> = (|| {
             (migration.apply)(&tx)?;
-            verify_foreign_keys(&tx)?;
-            verify_fts_integrity(&tx)?;
+            storage::verify_foreign_keys(&tx)?;
+            storage::check_fts_integrity(&tx)
+                .context("FTS5 integrity check failed during migration")?;
             tx.pragma_update(None, "user_version", migration.target_version)?;
             tx.commit()?;
             Ok(())
@@ -244,29 +248,8 @@ fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(os)
 }
 
-fn verify_foreign_keys(tx: &Transaction<'_>) -> Result<()> {
-    let violation: Option<String> = tx
-        .query_row("PRAGMA foreign_key_check", [], |row| {
-            row.get::<_, String>(0)
-        })
-        .optional()?;
-    if let Some(table) = violation {
-        bail!("foreign key violation detected in table '{table}' during migration");
-    }
-    Ok(())
-}
-
-fn verify_fts_integrity(tx: &Transaction<'_>) -> Result<()> {
-    tx.execute(
-        "INSERT INTO artifact_fts(artifact_fts) VALUES('integrity-check')",
-        [],
-    )
-    .context("FTS5 integrity check failed during migration")?;
-    Ok(())
-}
-
 fn migrate_to_v1(tx: &Transaction<'_>) -> Result<()> {
-    tx.execute_batch(
+    tx.execute_batch(&format!(
         "CREATE TABLE artifacts (
            id TEXT PRIMARY KEY,
            canonical_key TEXT NOT NULL UNIQUE,
@@ -311,108 +294,40 @@ fn migrate_to_v1(tx: &Transaction<'_>) -> Result<()> {
            tag TEXT NOT NULL,
            PRIMARY KEY(artifact_id, tag)
          );
-         CREATE VIRTUAL TABLE artifact_fts USING fts5(
-           artifact_id UNINDEXED, title, summary, search_text, topics, entities, tags
-         );
+         {CREATE_FTS_V1_SQL}
          CREATE INDEX aliases_artifact_id ON aliases(artifact_id);
-         CREATE INDEX artifacts_recent ON artifacts(last_seen_at DESC);",
-    )?;
+         CREATE INDEX artifacts_recent ON artifacts(last_seen_at DESC);"
+    ))?;
     Ok(())
 }
 
 fn migrate_to_v2(tx: &Transaction<'_>) -> Result<()> {
-    tx.execute_batch(
+    tx.execute_batch(&format!(
         "ALTER TABLE artifacts ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;
          ALTER TABLE artifacts ADD COLUMN last_accessed_at TEXT;
          CREATE INDEX artifacts_accessed ON artifacts(access_count DESC, last_accessed_at DESC);
          DROP TABLE artifact_fts;
-         CREATE VIRTUAL TABLE artifact_fts USING fts5(
-           artifact_id UNINDEXED,
-           title,
-           summary,
-           search_text,
-           topics,
-           entities,
-           tags,
-           tokenize = 'porter unicode61'
-         );",
-    )?;
-    rebuild_all_fts(tx)?;
+         {CREATE_FTS_V2_SQL}"
+    ))?;
+    storage::rebuild_all_fts(tx)?;
     Ok(())
-}
-
-struct LegacyArtifactRow {
-    id: String,
-    canonical_key: String,
-    kind: String,
-    provider: Option<String>,
-    state: ArtifactState,
-    primary_uri: Option<String>,
-    title: Option<String>,
-    summary: Option<String>,
-    search_text: Option<String>,
-    source_external_id: Option<String>,
-    source_revision: Option<String>,
-    source_updated_at: Option<String>,
-    retrieval_json: Option<String>,
-    source_metadata_json: Option<String>,
-    catalog_metadata_json: Option<String>,
-    provenance_json: Option<String>,
-    is_explicitly_saved: bool,
-    access_count: i64,
-    last_accessed_at: Option<String>,
-    created_at: String,
-    updated_at: String,
-    last_seen_at: String,
-    last_indexed_at: Option<String>,
 }
 
 fn migrate_to_v3(tx: &Transaction<'_>) -> Result<()> {
     let rows = {
-        let mut stmt = tx.prepare(
-            "SELECT id, canonical_key, kind, provider, state, primary_uri, title, summary,
-                    search_text, source_external_id, source_revision, source_updated_at,
-                    retrieval_json, source_metadata_json, catalog_metadata_json, provenance_json,
-                    is_explicitly_saved, access_count, last_accessed_at,
-                    created_at, updated_at, last_seen_at, last_indexed_at
-             FROM artifacts
-             ORDER BY created_at ASC, id ASC",
-        )?;
-        stmt.query_map([], |row| {
-            Ok(LegacyArtifactRow {
-                id: row.get(0)?,
-                canonical_key: row.get(1)?,
-                kind: row.get(2)?,
-                provider: row.get(3)?,
-                state: row.get(4)?,
-                primary_uri: row.get(5)?,
-                title: row.get(6)?,
-                summary: row.get(7)?,
-                search_text: row.get(8)?,
-                source_external_id: row.get(9)?,
-                source_revision: row.get(10)?,
-                source_updated_at: row.get(11)?,
-                retrieval_json: row.get(12)?,
-                source_metadata_json: row.get(13)?,
-                catalog_metadata_json: row.get(14)?,
-                provenance_json: row.get(15)?,
-                is_explicitly_saved: row.get(16)?,
-                access_count: row.get(17)?,
-                last_accessed_at: row.get(18)?,
-                created_at: row.get(19)?,
-                updated_at: row.get(20)?,
-                last_seen_at: row.get(21)?,
-                last_indexed_at: row.get(22)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?
+        let sql = format!(
+            "SELECT {ARTIFACT_SELECT_COLUMNS} FROM artifacts ORDER BY created_at ASC, id ASC"
+        );
+        let mut stmt = tx.prepare(&sql)?;
+        stmt.query_map([], ArtifactRow::from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?
     };
 
     if rows.is_empty() {
         return Ok(());
     }
 
-    let mut groups: BTreeMap<String, (Identity, Vec<LegacyArtifactRow>)> = BTreeMap::new();
+    let mut groups: BTreeMap<String, (Identity, Vec<ArtifactRow>)> = BTreeMap::new();
     for row in rows {
         let locator = match row.primary_uri.as_deref() {
             Some(uri) if !uri.trim().is_empty() => Some(uri.to_owned()),
@@ -600,8 +515,7 @@ fn migrate_to_v3(tx: &Transaction<'_>) -> Result<()> {
     }
 
     if changed {
-        tx.execute("DELETE FROM artifact_fts", [])?;
-        rebuild_all_fts(tx)?;
+        storage::rebuild_all_fts(tx)?;
     }
     Ok(())
 }
@@ -613,54 +527,6 @@ fn max_opt_str(a: Option<String>, b: Option<String>) -> Option<String> {
         (None, Some(b)) => Some(b),
         (None, None) => None,
     }
-}
-
-fn rebuild_all_fts(tx: &Transaction<'_>) -> Result<()> {
-    let rows = {
-        let mut stmt = tx.prepare("SELECT id, title, summary, search_text FROM artifacts")?;
-        stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-
-    let mut topic_stmt = tx.prepare("SELECT topic FROM topics WHERE artifact_id=?1")?;
-    let mut entity_stmt = tx.prepare("SELECT entity FROM entities WHERE artifact_id=?1")?;
-    let mut tag_stmt = tx.prepare("SELECT tag FROM tags WHERE artifact_id=?1")?;
-    let mut insert_stmt = tx.prepare(
-        "INSERT INTO artifact_fts(artifact_id, title, summary, search_text, topics, entities, tags)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-    )?;
-
-    for (id, title, summary, search_text) in rows {
-        let topics = topic_stmt
-            .query_map([&id], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-            .join(" ");
-        let entities = entity_stmt
-            .query_map([&id], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-            .join(" ");
-        let tags = tag_stmt
-            .query_map([&id], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-            .join(" ");
-        insert_stmt.execute(params![
-            id,
-            title,
-            summary,
-            search_text,
-            topics,
-            entities,
-            tags
-        ])?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
