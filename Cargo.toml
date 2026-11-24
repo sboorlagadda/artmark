@@ -1,6 +1,6 @@
 [package]
 name = "artmark"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 description = "Local artifact catalog and FTS5 search for AI agents"
 license = "Apache-2.0"
@@ -11,8 +11,8 @@ readme = "README.md"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-url = "2"
+url = "2.5.9"
 uuid = { version = "1", features = ["v7"] }

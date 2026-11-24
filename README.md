@@ -1,6 +1,6 @@
 # artmark
 
-**Early / v0.2:** artmark is usable, but the CLI, JSON output, and SQLite schema are not yet stable compatibility contracts.
+**Early / v0.3:** artmark is usable, but the CLI, JSON output, and SQLite schema are not yet stable compatibility contracts.
 
 **A local bookmark manager for your agents.**
 
@@ -32,13 +32,10 @@ Think of artmark as **bookmarks for agents** — a local Yellow Pages for your a
 
 artmark is the agent's local catalog. Your agent's existing harness and tools access Google Drive, Figma, GitHub, the web, or your filesystem. artmark itself does not fetch from those systems.
 
-When you provide a durable artifact, the agent can register its pointer immediately. If you ask it to save the artifact, or it reads the artifact during its work, the agent uses its provider tool to inspect the source and creates a compact search card:
+When you ask an agent to save an artifact—or approve notable artifacts it read at the end of a task—the agent uses its provider tool to inspect the source and saves the pointer together with a compact search card:
 
 ```text
-You provide an artifact
-        │
-        ▼
-agent registers its pointer in artmark
+You ask to save (or approve at task end)
         │
         ▼
 agent resolves and reads the source
@@ -49,7 +46,7 @@ agent resolves and reads the source
 agent creates a compact search card
         │
         ▼
-artmark indexes the card in local SQLite
+artmark saves pointer + indexes card in local SQLite
 ```
 
 Later:
@@ -69,7 +66,7 @@ agent retrieves the current document
 through its Google Drive tool
 ```
 
-An uninspected artifact can stay registered as a pointer. A content-derived search card is indexed only after the agent has inspected the source with its available tools. artmark stores the **pointer, search card, and retrieval hints**, never a copy of the source artifact.
+artmark does not silently bookmark every URL you paste. By default, saved entries include a content-derived search card built after inspecting the source; pointer-only registration is kept as a fallback when no tool can read the source. artmark stores the **pointer, search card, and retrieval hints**, never a copy of the source artifact.
 
 The original Google Doc stays in Google Drive; the Figma file stays in Figma; the GitHub issue stays in GitHub.
 
@@ -137,13 +134,13 @@ The repository includes an [artmark skill](skills/artmark/SKILL.md) that teaches
 The agent workflow is:
 
 ```text
-1. Register pointers for durable artifacts you provide.
-2. When asked to save one, or when already reading it, resolve the source with an existing tool.
-3. Create a short search card from what it learned and index that card in artmark.
+1. Do not silently bookmark every pasted link.
+2. When you ask to save an artifact, resolve the source with an existing tool and save the pointer and search card together.
+3. At the end of a substantive task, ask which notable durable artifacts read during the task should be remembered, and save + index only the approved ones.
 4. When a task requires identifying an artifact by description, search artmark before a provider search, even if the provider is named. Then retrieve the current source through the provider tool.
 ```
 
-At the end of a task, the agent asks which relevant artifacts discovered through research or linked from something you supplied should be remembered. It does not register those links without your approval. See [AGENTS.md](AGENTS.md) for the full registration policy.
+See [AGENTS.md](AGENTS.md) for the full registration policy.
 
 ## Local by design
 
@@ -175,7 +172,7 @@ The agent's provider tools remain responsible for retrieving current source cont
 
 ## Install
 
-Download the latest prebuilt binary and its matching `.sha256` file from [GitHub Releases](https://github.com/sboorlagadda/artmark/releases/latest). These instructions use the `v0.2.3` filenames; substitute the filenames shown on the latest release if it is newer.
+Download the latest prebuilt binary and its matching `.sha256` file from [GitHub Releases](https://github.com/sboorlagadda/artmark/releases/latest). These instructions use the `v0.3.0` filenames; substitute the filenames shown on the latest release if it is newer.
 
 Starting with `v0.2.1`, each archive contains the executable, the artmark agent skill at `skills/artmark/SKILL.md`, and `LICENSE`.
 
@@ -191,7 +188,7 @@ Pick the archive for your machine:
 From a terminal in the directory containing both downloaded files, use the commands for your system. On Linux x86-64:
 
 ```bash
-archive=artmark-v0.2.3-x86_64-unknown-linux-gnu.tar.gz
+archive=artmark-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
 sha256sum -c "$archive.sha256"
 mkdir -p "$HOME/.local/bin"
 tar -xzf "$archive" -C "$HOME/.local/bin" artmark
@@ -199,10 +196,10 @@ export PATH="$HOME/.local/bin:$PATH"
 artmark --version
 ```
 
-On macOS, choose **one** archive name: `artmark-v0.2.3-aarch64-apple-darwin.tar.gz` for Apple Silicon or `artmark-v0.2.3-x86_64-apple-darwin.tar.gz` for Intel. Then run:
+On macOS, choose **one** archive name: `artmark-v0.3.0-aarch64-apple-darwin.tar.gz` for Apple Silicon or `artmark-v0.3.0-x86_64-apple-darwin.tar.gz` for Intel. Then run:
 
 ```bash
-archive=artmark-v0.2.3-aarch64-apple-darwin.tar.gz  # change to Intel filename if needed
+archive=artmark-v0.3.0-aarch64-apple-darwin.tar.gz  # change to Intel filename if needed
 shasum -a 256 -c "$archive.sha256"
 mkdir -p "$HOME/.local/bin"
 tar -xzf "$archive" -C "$HOME/.local/bin" artmark
@@ -217,7 +214,7 @@ Add `$HOME/.local/bin` to your shell's `PATH` configuration if you want `artmark
 On Windows x86-64, in PowerShell from the directory containing the downloads:
 
 ```powershell
-$archive = 'artmark-v0.2.3-x86_64-pc-windows-msvc.zip'
+$archive = 'artmark-v0.3.0-x86_64-pc-windows-msvc.zip'
 $expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
 $actual = (Get-FileHash $archive -Algorithm SHA256).Hash
 if ($actual -ne $expected) { throw 'Checksum mismatch' }
@@ -240,22 +237,19 @@ cargo install --locked --path .
 
 ## Try it
 
-These are the CLI commands an agent uses. To try them yourself, register an artifact:
+These are the CLI commands an agent uses. To try them yourself, save the example search card above as `card.json`, then register and index an artifact in one step:
 
 ```bash
 artmark add \
   'https://docs.google.com/document/d/ABC/edit' \
   --explicit \
+  --json-input card.json \
   --json
 ```
 
-artmark returns an `art_...` ID.
+artmark returns the indexed entry with its `art_...` ID.
 
-After inspecting the source, save the example search card above as `card.json` and index it:
-
-```bash
-artmark index art_... --json-input card.json
-```
+You can also register a pointer alone when the source cannot be inspected yet, then update its card later with `artmark index art_... --json-input card.json`. Use `artmark recent --state registered` to list pointer-only entries that have not been indexed yet.
 
 Find it later:
 
@@ -358,7 +352,7 @@ Search scores are local ranking scores, not probabilities.
 
 ## Status
 
-artmark is an early `v0.2` release. CLI behavior, JSON fields, and the local database schema may change before `1.0`.
+artmark is an early `v0.3` release. CLI behavior, JSON fields, and the local database schema may change before `1.0`.
 
 The CLI and local FTS5 catalog are available now.
 

@@ -413,6 +413,8 @@ fn context_init_creates_and_updates_idempotently_and_rejects_bad_markers() {
     assert!(generated.starts_with(prefix));
     assert!(generated.ends_with(suffix));
     assert!(generated.contains("## Using artmark"));
+    assert!(generated.contains("Do not automatically register"));
+    assert!(generated.contains("--json-input"));
     assert!(
         !generated.replace("\r\n", "").contains('\n'),
         "context init should preserve CRLF throughout the file"
@@ -486,6 +488,183 @@ fn context_init_json_handles_non_utf8_current_directory() {
     assert_eq!(result["action"], "created");
     assert!(result["path"].as_str().unwrap().contains('\u{fffd}'));
     assert!(dir.join("AGENTS.md").is_file());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn add_with_json_input_indexes_atomically_and_rejects_invalid_cards() {
+    let dir = std::env::temp_dir().join(format!("artmark-add-index-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+
+    let bad_card =
+        r#"{"source_metadata":{"body":"nope"},"catalog":{"summary":"x","search_text":"y"}}"#;
+    let mut bad_cmd = Command::new(env!("CARGO_BIN_EXE_artmark"));
+    bad_cmd
+        .args([
+            "--database",
+            db.to_str().unwrap(),
+            "add",
+            "https://docs.google.com/document/d/ONE/edit",
+            "--explicit",
+            "--json-input",
+            "-",
+            "--json",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = bad_cmd.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(bad_card.as_bytes())
+        .unwrap();
+    let bad_output = child.wait_with_output().unwrap();
+    assert_eq!(bad_output.status.code(), Some(6));
+    assert!(bad_output.stdout.is_empty());
+    assert_eq!(row_counts(&db), (0, 0, 0));
+
+    let card = r#"{
+      "source_metadata":{"title":"Webhook Retries RFC","revision":"2"},
+      "catalog":{
+        "summary":"Retry backoff and dead-letter queue design",
+        "search_text":"webhook retries exponential backoff idempotency key dlq",
+        "topics":["webhooks","reliability"]
+      },
+      "retrieval":{"provider":"google_drive","external_id":"ONE"}
+    }"#;
+    let (code, added) = run(
+        &db,
+        &[
+            "add",
+            "https://docs.google.com/document/d/ONE/edit",
+            "--explicit",
+            "--json-input",
+            "-",
+        ],
+        Some(card),
+    );
+    assert_eq!(code, 0);
+    assert_eq!(added["state"], "indexed");
+    assert_eq!(added["is_explicitly_saved"], true);
+    assert_eq!(added["title"], "Webhook Retries RFC");
+    let id = added["id"].as_str().unwrap();
+
+    let (code, found) = run(&db, &["search", "idempotency"], None);
+    assert_eq!(code, 0);
+    assert_eq!(found["results"].as_array().unwrap().len(), 1);
+    assert_eq!(found["results"][0]["id"], id);
+
+    let card_file = dir.join("card.json");
+    fs::write(
+        &card_file,
+        r#"{"catalog":{"summary":"Updated retry design","search_text":"webhook circuit breaker"}}"#,
+    )
+    .unwrap();
+    let human = Command::new(env!("CARGO_BIN_EXE_artmark"))
+        .args([
+            "--database",
+            db.to_str().unwrap(),
+            "add",
+            "https://docs.google.com/document/d/ONE/view",
+            "--json-input",
+            card_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let human_stdout = String::from_utf8(human.stdout).unwrap();
+    let lines: Vec<_> = human_stdout.lines().collect();
+    assert_eq!(lines, vec![id, "gdrive:doc:ONE", "indexed"]);
+    assert_eq!(row_counts(&db), (1, 2, 1));
+
+    let secret = "top-secret-token";
+    let cred = Command::new(env!("CARGO_BIN_EXE_artmark"))
+        .args([
+            "--database",
+            db.to_str().unwrap(),
+            "add",
+            &format!("https://docs.google.com/document/d/ONE/preview?token={secret}"),
+            "--json-input",
+            card_file.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(cred.status.code(), Some(6));
+    assert!(cred.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&cred.stderr).contains(secret));
+    assert_eq!(row_counts(&db), (1, 2, 1));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn recent_filters_by_state_and_provider() {
+    let dir = std::env::temp_dir().join(format!("artmark-recent-filter-{}", Uuid::now_v7()));
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("artmark.db");
+
+    let (_, indexed) = run(
+        &db,
+        &[
+            "add",
+            "https://docs.google.com/document/d/IDX/edit",
+            "--explicit",
+            "--json-input",
+            "-",
+        ],
+        Some(
+            r#"{"source_metadata":{"title":"Indexed Doc"},"catalog":{"summary":"Doc","search_text":"indexed doc"}}"#,
+        ),
+    );
+    let (_, pointer_only) = run(
+        &db,
+        &[
+            "add",
+            "https://github.com/sboorlagadda/artmark/issues/28",
+            "--explicit",
+        ],
+        None,
+    );
+
+    let (code, reg) = run(&db, &["recent", "--state", "registered"], None);
+    assert_eq!(code, 0);
+    assert_eq!(reg["results"].as_array().unwrap().len(), 1);
+    assert_eq!(reg["results"][0]["id"], pointer_only["id"]);
+
+    let (code, idx) = run(&db, &["recent", "--state", "indexed"], None);
+    assert_eq!(code, 0);
+    assert_eq!(idx["results"].as_array().unwrap().len(), 1);
+    assert_eq!(idx["results"][0]["id"], indexed["id"]);
+
+    let (code, gh) = run(
+        &db,
+        &["recent", "--state", "registered", "--provider", "github"],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(gh["results"].as_array().unwrap().len(), 1);
+    assert_eq!(gh["results"][0]["id"], pointer_only["id"]);
+
+    let empty_human = Command::new(env!("CARGO_BIN_EXE_artmark"))
+        .args([
+            "--database",
+            db.to_str().unwrap(),
+            "recent",
+            "--state",
+            "unreachable",
+        ])
+        .output()
+        .unwrap();
+    assert!(empty_human.status.success());
+    assert_eq!(
+        String::from_utf8(empty_human.stdout).unwrap(),
+        "No results found.\n"
+    );
 
     fs::remove_dir_all(dir).unwrap();
 }

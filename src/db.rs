@@ -108,45 +108,26 @@ impl Registry {
         let identity = identify(uri)?;
         let now = timestamp();
         let tx = self.conn.transaction()?;
-        let existing: Option<String> = tx
-            .query_row(
-                "SELECT id FROM artifacts WHERE canonical_key=?1",
-                [&identity.canonical_key],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let id = if let Some(id) = existing {
-            tx.execute(
-                "UPDATE artifacts SET last_seen_at=?2, updated_at=?2,
-                 title=COALESCE(title, ?3),
-                 is_explicitly_saved=MAX(is_explicitly_saved, ?4)
-                 WHERE id=?1",
-                params![id, now, title, explicitly_saved],
-            )?;
-            id
-        } else {
-            let id = format!("art_{}", Uuid::now_v7().simple());
-            tx.execute(
-                "INSERT INTO artifacts
-                 (id, canonical_key, kind, provider, state, primary_uri, title,
-                  source_external_id, is_explicitly_saved, created_at, updated_at, last_seen_at)
-                 VALUES (?1, ?2, ?3, ?4, 'registered', ?5, ?6, ?7, ?8, ?9, ?9, ?9)",
-                params![
-                    id,
-                    identity.canonical_key,
-                    identity.kind,
-                    identity.provider,
-                    identity.uri,
-                    title,
-                    identity.external_id,
-                    explicitly_saved,
-                    now
-                ],
-            )?;
-            id
-        };
-        add_alias(&tx, uri, &id, &now)?;
+        let id = upsert_artifact(&tx, &identity, uri, title, explicitly_saved, &now)?;
         update_fts(&tx, &id)?;
+        tx.commit()?;
+        self.get(&id)?.context("new artifact disappeared")
+    }
+
+    pub fn add_and_index(
+        &mut self,
+        uri: &str,
+        title: Option<&str>,
+        explicitly_saved: bool,
+        input: IndexInput,
+    ) -> Result<Artifact> {
+        let identity = identify(uri)?;
+        input.validate()?;
+        let now = timestamp();
+        let tx = self.conn.transaction()?;
+        let id = upsert_artifact(&tx, &identity, uri, title, explicitly_saved, &now)?;
+        let current = load_artifact(&tx, &id)?;
+        apply_index(&tx, &current, input, &now)?;
         tx.commit()?;
         self.get(&id)?.context("new artifact disappeared")
     }
@@ -155,44 +136,26 @@ impl Registry {
         let Some(id) = self.resolve_id(key)? else {
             return Ok(None);
         };
-        let mut artifact: Artifact = self.conn.query_row(
-            "SELECT id, canonical_key, kind, provider, state, primary_uri, title, summary,
-                    search_text, source_external_id, source_revision, source_updated_at,
-                    retrieval_json, source_metadata_json, catalog_metadata_json, provenance_json,
-                    is_explicitly_saved, created_at, updated_at, last_seen_at, last_indexed_at
-             FROM artifacts WHERE id=?1",
-            [&id],
-            artifact_row,
-        )?;
-        artifact.topics = strings(
-            &self.conn,
-            "SELECT topic FROM topics WHERE artifact_id=?1 ORDER BY topic",
-            &id,
-        )?;
-        artifact.entities = strings(
-            &self.conn,
-            "SELECT entity FROM entities WHERE artifact_id=?1 ORDER BY entity",
-            &id,
-        )?;
-        artifact.tags = strings(
-            &self.conn,
-            "SELECT tag FROM tags WHERE artifact_id=?1 ORDER BY tag",
-            &id,
-        )?;
-        artifact.aliases = strings(
-            &self.conn,
-            "SELECT uri FROM aliases WHERE artifact_id=?1 ORDER BY uri",
-            &id,
-        )?;
-        Ok(Some(artifact))
+        load_artifact(&self.conn, &id).map(Some)
     }
 
-    pub fn recent(&self, limit: usize) -> Result<Vec<Artifact>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM artifacts ORDER BY last_seen_at DESC, id DESC LIMIT ?1")?;
+    pub fn recent(
+        &self,
+        limit: usize,
+        state: Option<&str>,
+        provider: Option<&str>,
+    ) -> Result<Vec<Artifact>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM artifacts
+             WHERE (?1 IS NULL OR state = ?1)
+               AND (?2 IS NULL OR provider = ?2)
+             ORDER BY last_seen_at DESC, id DESC
+             LIMIT ?3",
+        )?;
         let ids = stmt
-            .query_map([limit as i64], |row| row.get::<_, String>(0))?
+            .query_map(params![state, provider, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         ids.into_iter()
             .map(|id| self.get(&id).map(Option::unwrap))
@@ -215,56 +178,9 @@ impl Registry {
             return Ok(None);
         };
         input.validate()?;
-        let source = input.source_metadata.or(old.source_metadata.clone());
-        let title = source
-            .as_ref()
-            .and_then(|s| s.get("title"))
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or(old.title.clone());
-        let revision = source
-            .as_ref()
-            .and_then(|s| s.get("revision"))
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or(old.source_revision.clone());
-        let source_updated_at = source
-            .as_ref()
-            .and_then(|s| s.get("updated_at"))
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or(old.source_updated_at.clone());
-        let retrieval = input.retrieval.or(old.retrieval.clone());
-        let provenance = input
-            .resolver
-            .map(|resolver| json!({"resolver": resolver}))
-            .or(old.provenance.clone());
-        let catalog_json = serde_json::to_string(&input.catalog)?;
         let now = timestamp();
         let tx = self.conn.transaction()?;
-        tx.execute(
-            "UPDATE artifacts SET state='indexed', title=?2, summary=?3, search_text=?4,
-             source_revision=?5, source_updated_at=?6, retrieval_json=?7,
-             source_metadata_json=?8, catalog_metadata_json=?9, provenance_json=?10,
-             updated_at=?11, last_indexed_at=?11 WHERE id=?1",
-            params![
-                old.id,
-                title,
-                input.catalog.summary,
-                input.catalog.search_text,
-                revision,
-                source_updated_at,
-                json_string(&retrieval)?,
-                json_string(&source)?,
-                catalog_json,
-                json_string(&provenance)?,
-                now,
-            ],
-        )?;
-        replace_strings(&tx, "topics", "topic", &old.id, &input.catalog.topics)?;
-        replace_strings(&tx, "entities", "entity", &old.id, &input.catalog.entities)?;
-        replace_strings(&tx, "tags", "tag", &old.id, &input.catalog.tags)?;
-        update_fts(&tx, &old.id)?;
+        apply_index(&tx, &old, input, &now)?;
         tx.commit()?;
         self.get(&old.id)
     }
@@ -494,6 +410,140 @@ fn artifact_row(row: &Row<'_>) -> rusqlite::Result<Artifact> {
         last_seen_at: row.get(19)?,
         last_indexed_at: row.get(20)?,
     })
+}
+
+fn load_artifact(conn: &Connection, id: &str) -> Result<Artifact> {
+    let mut artifact: Artifact = conn.query_row(
+        "SELECT id, canonical_key, kind, provider, state, primary_uri, title, summary,
+                search_text, source_external_id, source_revision, source_updated_at,
+                retrieval_json, source_metadata_json, catalog_metadata_json, provenance_json,
+                is_explicitly_saved, created_at, updated_at, last_seen_at, last_indexed_at
+         FROM artifacts WHERE id=?1",
+        [id],
+        artifact_row,
+    )?;
+    artifact.topics = strings(
+        conn,
+        "SELECT topic FROM topics WHERE artifact_id=?1 ORDER BY topic",
+        id,
+    )?;
+    artifact.entities = strings(
+        conn,
+        "SELECT entity FROM entities WHERE artifact_id=?1 ORDER BY entity",
+        id,
+    )?;
+    artifact.tags = strings(
+        conn,
+        "SELECT tag FROM tags WHERE artifact_id=?1 ORDER BY tag",
+        id,
+    )?;
+    artifact.aliases = strings(
+        conn,
+        "SELECT uri FROM aliases WHERE artifact_id=?1 ORDER BY uri",
+        id,
+    )?;
+    Ok(artifact)
+}
+
+fn upsert_artifact(
+    tx: &Transaction<'_>,
+    identity: &Identity,
+    uri: &str,
+    title: Option<&str>,
+    explicitly_saved: bool,
+    now: &str,
+) -> Result<String> {
+    let existing: Option<String> = tx
+        .query_row(
+            "SELECT id FROM artifacts WHERE canonical_key=?1",
+            [&identity.canonical_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let id = if let Some(id) = existing {
+        tx.execute(
+            "UPDATE artifacts SET last_seen_at=?2, updated_at=?2,
+             title=COALESCE(title, ?3),
+             is_explicitly_saved=MAX(is_explicitly_saved, ?4)
+             WHERE id=?1",
+            params![id, now, title, explicitly_saved],
+        )?;
+        id
+    } else {
+        let id = format!("art_{}", Uuid::now_v7().simple());
+        tx.execute(
+            "INSERT INTO artifacts
+             (id, canonical_key, kind, provider, state, primary_uri, title,
+              source_external_id, is_explicitly_saved, created_at, updated_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, 'registered', ?5, ?6, ?7, ?8, ?9, ?9, ?9)",
+            params![
+                id,
+                identity.canonical_key,
+                identity.kind,
+                identity.provider,
+                identity.uri,
+                title,
+                identity.external_id,
+                explicitly_saved,
+                now
+            ],
+        )?;
+        id
+    };
+    add_alias(tx, uri, &id, now)?;
+    Ok(id)
+}
+
+fn apply_index(tx: &Transaction<'_>, old: &Artifact, input: IndexInput, now: &str) -> Result<()> {
+    let source = input.source_metadata.or(old.source_metadata.clone());
+    let title = source
+        .as_ref()
+        .and_then(|s| s.get("title"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or(old.title.clone());
+    let revision = source
+        .as_ref()
+        .and_then(|s| s.get("revision"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or(old.source_revision.clone());
+    let source_updated_at = source
+        .as_ref()
+        .and_then(|s| s.get("updated_at"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or(old.source_updated_at.clone());
+    let retrieval = input.retrieval.or(old.retrieval.clone());
+    let provenance = input
+        .resolver
+        .map(|resolver| json!({"resolver": resolver}))
+        .or(old.provenance.clone());
+    let catalog_json = serde_json::to_string(&input.catalog)?;
+    tx.execute(
+        "UPDATE artifacts SET state='indexed', title=?2, summary=?3, search_text=?4,
+         source_revision=?5, source_updated_at=?6, retrieval_json=?7,
+         source_metadata_json=?8, catalog_metadata_json=?9, provenance_json=?10,
+         updated_at=?11, last_indexed_at=?11 WHERE id=?1",
+        params![
+            old.id,
+            title,
+            input.catalog.summary,
+            input.catalog.search_text,
+            revision,
+            source_updated_at,
+            json_string(&retrieval)?,
+            json_string(&source)?,
+            catalog_json,
+            json_string(&provenance)?,
+            now,
+        ],
+    )?;
+    replace_strings(tx, "topics", "topic", &old.id, &input.catalog.topics)?;
+    replace_strings(tx, "entities", "entity", &old.id, &input.catalog.entities)?;
+    replace_strings(tx, "tags", "tag", &old.id, &input.catalog.tags)?;
+    update_fts(tx, &old.id)?;
+    Ok(())
 }
 
 fn strings(conn: &Connection, sql: &str, id: &str) -> Result<Vec<String>> {
@@ -793,6 +843,125 @@ mod tests {
         assert_eq!(db.doctor().unwrap()["healthy"], true);
         assert!(db.forget(&item.id).unwrap());
         assert!(db.search("OAuth", 10, &filters).unwrap().is_empty());
+        assert_eq!(db.doctor().unwrap()["healthy"], true);
+        drop(db);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn add_and_index_is_atomic_deduplicates_and_filters_recent() {
+        let path = test_path();
+        let mut db = Registry::open(&path).unwrap();
+
+        let empty_before = snapshot(&db);
+        let invalid_card: IndexInput = serde_json::from_value(json!({
+            "source_metadata": {"body": "must reject"},
+            "catalog": {"summary": "Bad", "search_text": "Bad"}
+        }))
+        .unwrap();
+        assert!(
+            db.add_and_index(
+                "https://docs.google.com/document/d/ATOM/edit",
+                None,
+                true,
+                invalid_card,
+            )
+            .is_err()
+        );
+        assert_eq!(snapshot(&db), empty_before);
+
+        let first = db
+            .add_and_index(
+                "https://docs.google.com/document/d/ATOM/edit",
+                Some("Fallback Title"),
+                true,
+                catalog("Atomic Doc", "SCIM provisioning architecture"),
+            )
+            .unwrap();
+        assert_eq!(first.state, "indexed");
+        assert!(first.is_explicitly_saved);
+        assert_eq!(first.title.as_deref(), Some("Atomic Doc"));
+        assert_eq!(
+            db.search("SCIM", 10, &SearchFilters::default()).unwrap()[0].id,
+            first.id
+        );
+
+        let minimal_card: IndexInput = serde_json::from_value(json!({
+            "catalog": {
+                "summary": "Refreshed summary",
+                "search_text": "OIDC federation refresh",
+                "topics": ["OIDC"]
+            }
+        }))
+        .unwrap();
+        let second = db
+            .add_and_index(
+                "https://docs.google.com/document/d/ATOM/view",
+                None,
+                false,
+                minimal_card,
+            )
+            .unwrap();
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.aliases.len(), 2);
+        assert!(second.is_explicitly_saved);
+        assert_eq!(second.title.as_deref(), Some("Atomic Doc"));
+        assert_eq!(second.source_revision.as_deref(), Some("3"));
+        assert!(second.retrieval.is_some());
+        assert_eq!(
+            db.search("OIDC", 10, &SearchFilters::default()).unwrap()[0].id,
+            first.id
+        );
+
+        let before_bad_update = snapshot(&db);
+        let changes = db.conn.total_changes();
+        let empty_summary: IndexInput = serde_json::from_value(json!({
+            "catalog": {"summary": "   ", "search_text": "nonempty"}
+        }))
+        .unwrap();
+        assert!(
+            db.add_and_index(
+                "https://docs.google.com/document/d/ATOM/preview",
+                None,
+                true,
+                empty_summary,
+            )
+            .is_err()
+        );
+        assert!(
+            db.add_and_index(
+                "https://docs.google.com/document/d/ATOM/preview?token=TEST_SECRET",
+                None,
+                true,
+                catalog("Should Fail", "Should Fail"),
+            )
+            .is_err()
+        );
+        assert_eq!(db.conn.total_changes(), changes);
+        assert_eq!(snapshot(&db), before_bad_update);
+
+        let unindexed = db
+            .add(
+                "https://github.com/org/repo/issues/99",
+                Some("Bug 99"),
+                true,
+            )
+            .unwrap();
+        assert_eq!(unindexed.state, "registered");
+        let registered = db.recent(10, Some("registered"), None).unwrap();
+        assert_eq!(registered.len(), 1);
+        assert_eq!(registered[0].id, unindexed.id);
+        let indexed = db.recent(10, Some("indexed"), None).unwrap();
+        assert_eq!(indexed.len(), 1);
+        assert_eq!(indexed[0].id, first.id);
+        let gdrive = db.recent(10, None, Some("google_drive")).unwrap();
+        assert_eq!(gdrive.len(), 1);
+        assert_eq!(gdrive[0].id, first.id);
+        assert!(
+            db.recent(10, Some("indexed"), Some("github"))
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(db.doctor().unwrap()["healthy"], true);
         drop(db);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
