@@ -141,3 +141,148 @@ fn in_memory_registry_with_base_dir_deduplicates_relative_paths() {
 
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn filtered_search_survives_more_than_500_unfiltered_fts_matches_and_hydrates_topics() {
+    let mut reg = Registry::open_in_memory().unwrap();
+
+    for idx in 0..549 {
+        let uri = format!("https://example.com/decoy-{idx}");
+        let card = IndexInput {
+            source_metadata: Some(json!({"title": format!("Outage Decoy {idx}")})),
+            catalog: CatalogInput {
+                summary: "Outage outage outage decoy".into(),
+                search_text: "outage incident decoy".into(),
+                topics: vec!["noise".into()],
+                entities: vec![],
+                tags: vec!["noise".into()],
+            },
+            retrieval: None,
+            resolver: None,
+        };
+        reg.add(&uri, None, false, Some(card)).unwrap();
+    }
+
+    let target_card = IndexInput {
+        source_metadata: Some(json!({"title": "GitHub Outage Postmortem"})),
+        catalog: CatalogInput {
+            summary: "Postmortem for database outage".into(),
+            search_text: "root cause analysis for outage".into(),
+            topics: vec!["incident-response".into(), "postgres".into()],
+            entities: vec!["Primary DB".into()],
+            tags: vec!["sev1".into()],
+        },
+        retrieval: None,
+        resolver: None,
+    };
+    let target = reg
+        .add(
+            "https://github.com/org/repo/issues/550",
+            None,
+            true,
+            Some(target_card),
+        )
+        .unwrap();
+
+    let by_provider = reg
+        .search(
+            "outage",
+            10,
+            &SearchFilters {
+                provider: Some("github"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(by_provider.len(), 1);
+    assert_eq!(by_provider[0].id, target.id);
+    assert_eq!(
+        by_provider[0].topics,
+        vec!["incident-response".to_owned(), "postgres".to_owned()]
+    );
+
+    let by_topic = reg
+        .search(
+            "outage",
+            10,
+            &SearchFilters {
+                topic: Some("INCIDENT-RESPONSE"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(by_topic.len(), 1);
+    assert_eq!(by_topic[0].id, target.id);
+
+    let by_tag = reg
+        .search(
+            "outage",
+            10,
+            &SearchFilters {
+                tag: Some("SEV1"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(by_tag.len(), 1);
+    assert_eq!(by_tag[0].id, target.id);
+}
+
+#[test]
+fn search_evaluates_all_eight_filter_predicates_and_locator_short_circuit() {
+    let mut reg = Registry::open_in_memory().unwrap();
+
+    let doc = reg
+        .add(
+            "https://docs.google.com/document/d/FILT1/edit",
+            None,
+            true,
+            Some(sample_card("Filter Spec", "sqlite filter pushdown spec")),
+        )
+        .unwrap();
+
+    let empty_date = reg
+        .search(
+            "pushdown",
+            10,
+            &SearchFilters {
+                created_after: Some("2999-01-01T00:00:00Z"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(empty_date.is_empty());
+
+    let matched = reg
+        .search(
+            "pushdown",
+            10,
+            &SearchFilters {
+                provider: Some("google_drive"),
+                kind: Some("google_doc"),
+                topic: Some("ARCHITECTURE"),
+                tag: Some("SPEC"),
+                state: Some(ArtifactState::Indexed),
+                created_after: Some("2000-01-01T00:00:00Z"),
+                seen_after: Some("2000-01-01T00:00:00Z"),
+                indexed_after: Some("2000-01-01T00:00:00Z"),
+            },
+        )
+        .unwrap();
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched[0].id, doc.id);
+    assert_eq!(matched[0].topics, vec!["architecture".to_owned()]);
+
+    // Exact locator short-circuits even when excluded by a filter.
+    let excluded_locator = reg
+        .search(
+            "https://docs.google.com/document/d/FILT1/view",
+            10,
+            &SearchFilters {
+                provider: Some("github"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(excluded_locator.is_empty());
+}

@@ -210,25 +210,6 @@ pub struct SearchCard {
     pub score: f64,
 }
 
-impl SearchCard {
-    pub fn from_artifact(artifact: &Artifact, score: f64) -> Self {
-        Self {
-            id: artifact.id.clone(),
-            canonical_key: artifact.canonical_key.clone(),
-            title: artifact.title.clone(),
-            kind: artifact.kind.clone(),
-            provider: artifact.provider.clone(),
-            state: artifact.state,
-            summary: artifact.summary.clone(),
-            primary_uri: artifact.primary_uri.clone(),
-            topics: artifact.topics.clone(),
-            source_updated_at: artifact.source_updated_at.clone(),
-            last_indexed_at: artifact.last_indexed_at.clone(),
-            score,
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct SearchFilters<'a> {
     pub provider: Option<&'a str>,
@@ -239,30 +220,6 @@ pub struct SearchFilters<'a> {
     pub created_after: Option<&'a str>,
     pub seen_after: Option<&'a str>,
     pub indexed_after: Option<&'a str>,
-}
-
-impl SearchFilters<'_> {
-    pub fn allows(&self, artifact: &Artifact) -> bool {
-        self.provider
-            .is_none_or(|v| artifact.provider.as_deref() == Some(v))
-            && self.kind.is_none_or(|v| artifact.kind == v)
-            && self
-                .topic
-                .is_none_or(|v| artifact.topics.iter().any(|t| t.eq_ignore_ascii_case(v)))
-            && self
-                .tag
-                .is_none_or(|v| artifact.tags.iter().any(|t| t.eq_ignore_ascii_case(v)))
-            && self.state.is_none_or(|v| artifact.state == v)
-            && self
-                .created_after
-                .is_none_or(|v| artifact.created_at.as_str() >= v)
-            && self
-                .seen_after
-                .is_none_or(|v| artifact.last_seen_at.as_str() >= v)
-            && self
-                .indexed_after
-                .is_none_or(|v| artifact.last_indexed_at.as_deref().is_some_and(|d| d >= v))
-    }
 }
 
 #[cfg(test)]
